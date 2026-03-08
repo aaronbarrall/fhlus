@@ -1,0 +1,16 @@
+/.quarto/
+
+# Claude Code local settings
+.claude/
+
+# Development artifacts (not for public release)
+CLAUDE.md
+NEXT_STEPS.md
+IMPLEMENTATION_SUMMARY.md
+SHINY_APP_PLAN.md
+PACKAGE_READY.md
+cran-comments.md
+build_package.R
+fhlus_demo.qmd
+_original_files/
+tests/testthat/Rplots.pdf

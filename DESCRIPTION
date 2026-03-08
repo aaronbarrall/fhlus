@@ -1,0 +1,41 @@
+Package: fhlus
+Title: Fair Housing Land Use Score Calculation
+Version: 0.2.0
+Authors@R: c(
+    person("Aaron Barrall",, email = "aaronbarrall@ucla.edu", role = c("aut", "cre"))
+    )
+Description: Calculate the Fair Housing Land Use Score (FHLUS), a statistical measure
+    that analyzes the spatial distribution of housing units (or other variables) across
+    geographic areas ranked by opportunity indicators (e.g., income, poverty rate).
+    The score normalizes the Area Under the Curve (AUC) to range from -1 (most
+    concentrated in lowest-opportunity areas) to +1 (most concentrated in
+    highest-opportunity areas). 
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.2.0
+Depends:
+    R (>= 3.5.0)
+Imports:
+    dplyr (>= 1.0.0),
+    ggplot2 (>= 3.4.0),
+    tibble (>= 3.1.0),
+    tidyr (>= 1.2.0),
+    rlang (>= 1.0.0),
+    DescTools (>= 0.99.44),
+    scales
+Suggests:
+    sf,
+    spdep,
+    furrr,
+    future,
+    openxlsx,
+    jsonlite,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    covr
+VignetteBuilder: knitr
+URL: https://github.com/aaronbarrall/fhlus
+BugReports: https://github.com/aaronbarrall/fhlus/issues
