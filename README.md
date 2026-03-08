@@ -18,13 +18,7 @@ This tool helps urban planners, housing researchers, and policymakers assess whe
 
 ## Installation
 
-Install from CRAN:
-
-```r
-install.packages("fhlus")
-```
-
-Or install the development version from GitHub:
+Install the development version from GitHub:
 
 ```r
 # install.packages("devtools")
