@@ -1,7 +1,6 @@
 # fhlus: Fair Housing Land Use Score
 
 <!-- badges: start -->
-[![R-CMD-check](https://github.com/yourusername/fhlus/workflows/R-CMD-check/badge.svg)](https://github.com/yourusername/fhlus/actions)
 [![CRAN status](https://www.r-pkg.org/badges/version/fhlus)](https://CRAN.R-project.org/package=fhlus)
 <!-- badges: end -->
 
@@ -29,7 +28,7 @@ Or install the development version from GitHub:
 
 ```r
 # install.packages("devtools")
-devtools::install_github("yourusername/fhlus")
+devtools::install_github("aaronbarrall/fhlus")
 ```
 
 ## Quick Start
