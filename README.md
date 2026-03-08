@@ -1,9 +1,5 @@
 # fhlus: Fair Housing Land Use Score
 
-<!-- badges: start -->
-[![CRAN status](https://www.r-pkg.org/badges/version/fhlus)](https://CRAN.R-project.org/package=fhlus)
-<!-- badges: end -->
-
 ## Overview
 
 The **fhlus** package calculates the Fair Housing Land Use Score (FHLUS), a statistical measure that analyzes the spatial distribution of housing units (or other variables) across geographic areas ranked by opportunity indicators.
