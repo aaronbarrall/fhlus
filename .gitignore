@@ -13,4 +13,6 @@ cran-comments.md
 build_package.R
 fhlus_demo.qmd
 _original_files/
+fhlus-shiny/
+fhlus_demo_files/
 tests/testthat/Rplots.pdf
