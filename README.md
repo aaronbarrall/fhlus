@@ -290,7 +290,3 @@ citation("fhlus")
 ## License
 
 MIT License - see LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please see CONTRIBUTING.md for guidelines.
