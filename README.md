@@ -193,14 +193,6 @@ print(results$wide)
 
 - **Near-zero scores**: Distribution roughly proportional to available land area
 
-### What Makes a "Good" Score?
-
-This depends on context:
-
-- For **affordable housing**: A positive score might indicate equitable access to opportunity
-- For **market-rate housing**: Patterns may reflect market forces
-- Consider scores in combination with other equity metrics
-
 ## Data Requirements
 
 Your data must include:
@@ -208,7 +200,7 @@ Your data must include:
 1. **Numerator**: The variable of interest (e.g., housing units, affordable units)
 2. **Rank variable**: Opportunity indicator(s) where higher values = better opportunity
    - For "lower is better" metrics (e.g., poverty rate), use negative values or the `ascending = FALSE` parameter
-3. **Denominator**: Typically land area in the same units across observations
+3. **Denominator**: Typically land area in the same units across observations. Other common options are neighborhood population or housing units
 
 Minimum requirements:
 - At least 2 observations
