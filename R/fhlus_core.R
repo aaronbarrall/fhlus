@@ -28,6 +28,11 @@
 #'   \code{missing} or \code{missing_pct} to be specified.
 #' @param ci_alpha Numeric, transparency for CI ribbon bands (default: 0.15).
 #'   Only used when \code{show_ci_bands = TRUE}.
+#' @param annotation Controls the score annotation on the plot. \code{TRUE}
+#'   (default) shows "FHLUS = X"; \code{NULL} or \code{FALSE} suppresses it;
+#'   a character string displays that text instead.
+#' @param annotation_x Numeric, x-position of the annotation (0-1, default: 0.125).
+#' @param annotation_y Numeric, y-position of the annotation (0-1, default: 0.93).
 #' @param verbose Logical, whether to print warnings and messages
 #'
 #' @return A list of class "fhlus" with components:
@@ -87,6 +92,9 @@ fhlus_score <- function(df,
                         plot_subtitle = NULL,
                         show_ci_bands = FALSE,
                         ci_alpha = 0.15,
+                        annotation = TRUE,
+                        annotation_x = 0.125,
+                        annotation_y = 0.93,
                         verbose = TRUE) {
 
   # Input validation
@@ -123,7 +131,8 @@ fhlus_score <- function(df,
   if (graph) {
     plot_obj <- create_fhlus_plot(base_result, ci_results, missing,
                                     numerator, denom, rank_var, boundary_label,
-                                    plot_subtitle, show_ci_bands, ci_alpha)
+                                    plot_subtitle, show_ci_bands, ci_alpha,
+                                    annotation, annotation_x, annotation_y)
     print(plot_obj)
   }
 
@@ -421,7 +430,9 @@ create_fhlus_plot <- function(base_result, ci_results = NULL, missing = NULL,
                                numerator = "Variable", denom = "Area",
                                rank_var = "Rank", boundary_label = "Tract Boundary",
                                plot_subtitle = NULL,
-                               show_ci_bands = FALSE, ci_alpha = 0.15) {
+                               show_ci_bands = FALSE, ci_alpha = 0.15,
+                               annotation = TRUE, annotation_x = 0.125,
+                               annotation_y = 0.93) {
 
   # Create dynamic labels
   var_label <- paste("Cumulative", numerator)
@@ -488,13 +499,25 @@ create_fhlus_plot <- function(base_result, ci_results = NULL, missing = NULL,
     ) +
     ggplot2::scale_y_continuous(labels = scales::percent) +
     ggplot2::scale_x_continuous(labels = scales::percent) +
-    ggplot2::annotate("text", x = 0.125, y = 0.93,
-                      label = paste("FHLUS =", round(base_result$score, 2))) +
+    {
+      ann_label <- if (isTRUE(annotation)) {
+        paste("FHLUS =", round(base_result$score, 2))
+      } else if (is.character(annotation)) {
+        annotation
+      } else {
+        NULL
+      }
+      if (!is.null(ann_label)) {
+        ggplot2::annotate("text", x = annotation_x, y = annotation_y, label = ann_label)
+      } else {
+        NULL
+      }
+    } +
     # X-axis ranking annotations
-    ggplot2::annotate("text", x = 0.05, y = -0.08,
+    ggplot2::annotate("text", x = 0.05, y = -0.12,
                       label = paste("Lower", rank_display),
                       hjust = 0, vjust = 1, size = 3.5, fontface = "italic") +
-    ggplot2::annotate("text", x = 0.95, y = -0.08,
+    ggplot2::annotate("text", x = 0.95, y = -0.12,
                       label = paste("Higher", rank_display),
                       hjust = 1, vjust = 1, size = 3.5, fontface = "italic") +
     ggplot2::coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), clip = "off") +

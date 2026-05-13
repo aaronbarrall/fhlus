@@ -226,10 +226,10 @@ fhlus_compare <- function(result_a, result_b,
       rank_var
     }
     gg <- gg +
-      ggplot2::annotate("text", x = 0.05, y = -0.08,
+      ggplot2::annotate("text", x = 0.05, y = -0.12,
                         label = paste("Lower", rank_display),
                         hjust = 0, vjust = 1, size = 3.5, fontface = "italic") +
-      ggplot2::annotate("text", x = 0.95, y = -0.08,
+      ggplot2::annotate("text", x = 0.95, y = -0.12,
                         label = paste("Higher", rank_display),
                         hjust = 1, vjust = 1, size = 3.5, fontface = "italic")
   }
