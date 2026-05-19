@@ -269,7 +269,7 @@ export_fhlus(result, filename = "my_fhlus_results", format = "rds")
 - **Vignettes**:
   - `vignette("fhlus-intro")`: Introduction and basic usage
   - `vignette("fhlus-advanced")`: Advanced features and spatial data
-- **Issues**: Report bugs at <https://github.com/yourusername/fhlus/issues>
+- **Issues**: Report bugs at <https://github.com/aaronbarrall/fhlus/issues>
 
 ## Citation
 
