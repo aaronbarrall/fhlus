@@ -74,9 +74,7 @@
 
 # fhlus 0.1.0
 
-## Initial CRAN Release
-
-This is the first release of the fhlus package to CRAN.
+## Initial Release
 
 ### Features
 
