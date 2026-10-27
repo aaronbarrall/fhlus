@@ -30,6 +30,14 @@
 #'   \item \code{\link{export_fhlus}}: Export results to CSV, XLSX, JSON, or RDS
 #' }
 #'
+#' Interactive plots (require plotly and htmlwidgets):
+#' \itemize{
+#'   \item \code{\link{fhlus_interactive}}: Interactive FHLUS plot with per-geography tooltips
+#'   \item \code{\link{fhlus_compare_interactive}}: Interactive policy comparison
+#'   \item \code{\link{fhlus_save_html}}: Save an interactive plot as standalone HTML
+#'   \item \code{\link{fhlus_segments}}: Per-geography segment data
+#' }
+#'
 #' @section FHLUS Score Interpretation:
 #' The FHLUS score ranges from -1 to +1:
 #' \itemize{
@@ -84,8 +92,8 @@
 #' }
 #'
 #' @section References:
-#' For more information about fair housing metrics and land use analysis, see the
-#' package vignettes: \code{vignette("fhlus-intro")} and \code{vignette("fhlus-advanced")}
+#' For a walkthrough of the interactive plots and HTML export, see
+#' \code{vignette("interactive-plots", package = "fhlus")}.
 #'
 #' @docType package
 #' @name fhlus-package

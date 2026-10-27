@@ -1,6 +1,6 @@
 Package: fhlus
 Title: Fair Housing Land Use Score Calculation
-Version: 0.2.0
+Version: 0.4.0.9000
 Authors@R: c(
     person("Aaron Barrall",, email = "aaronbarrall@ucla.edu", role = c("aut", "cre"))
     )
@@ -24,8 +24,14 @@ Imports:
     tidyr (>= 1.2.0),
     rlang (>= 1.0.0),
     DescTools (>= 0.99.44),
-    scales
+    scales,
+    grDevices,
+    stats,
+    tools,
+    utils
 Suggests:
+    plotly (>= 4.10.0),
+    htmlwidgets (>= 1.5.0),
     sf,
     spdep,
     furrr,

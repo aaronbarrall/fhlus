@@ -1,3 +1,24 @@
+# fhlus (development version)
+
+## New Features
+
+### Interactive Plots
+
+* New `fhlus_interactive()` builds an interactive (plotly) version of the FHLUS plot. Hovering over the curve shows the geography under the cursor: its ID (e.g. GEOID), rank, raw rank-variable/numerator/denominator values, its shares and concentration, cumulative percentages, CI range, and any extra `tooltip_vars` — including variables not used in the ranking. The hovered segment is highlighted and its slice of the x-axis shaded.
+* New `fhlus_compare_interactive()` is the interactive counterpart to `fhlus_compare()`. Hovering shows one combined pop-up per geography — shared details once, a block per policy, and their difference (share of total, concentration, cumulative gap) — and highlights the geography on both curves.
+* New `fhlus_save_html()` saves an interactive plot (or an `fhlus` result directly) as a standalone HTML file that opens in any browser without R.
+* New `fhlus_segments()` returns one row per geography with its segment coordinates, shares, concentration (`share_var / share_denom`), and raw values. It underlies the interactive plots and is keyed by geography ID for joining to spatial data.
+* Inputs above 2,000 geographies automatically use WebGL for the hover layer.
+* `plotly` and `htmlwidgets` are new *suggested* dependencies; the core package does not require them.
+* New vignette, `vignette("interactive-plots")`, walks through the interactive plots, pop-ups, HTML export, the segment table, and Shiny use.
+* The README has a new "Interactive Plots" section with illustrated examples (`man/figures/`).
+
+### Result Metadata
+
+* `fhlus_score()` results gain a `$meta` element recording the column names and settings used (`numerator`, `denom`, `rank_var`, `tie_breaker`, `exclude_area`, `missing`). Existing elements are unchanged.
+
+---
+
 # fhlus 0.4.0
 
 ## New Features
