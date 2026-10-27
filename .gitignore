@@ -16,3 +16,7 @@ _original_files/
 fhlus-shiny/
 fhlus_demo_files/
 tests/testthat/Rplots.pdf
+
+# Built vignettes (devtools::build_vignettes)
+/doc/
+/Meta/

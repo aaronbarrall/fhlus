@@ -1,0 +1,277 @@
+---
+title: "Interactive FHLUS Plots"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Interactive FHLUS Plots}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+has_plotly <- requireNamespace("plotly", quietly = TRUE) &&
+  requireNamespace("htmlwidgets", quietly = TRUE)
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = has_plotly)
+```
+
+The static FHLUS plot shows the overall shape of the distribution. The
+interactive plots let you go a step further and ask *which* neighborhoods drive
+that shape. Hover over any part of the curve to see the geography it belongs to,
+its values, and any other variables you're interested in.
+
+This vignette covers:
+
+1. how each geography appears on the curve,
+2. interactive plots for a single result and for a policy comparison,
+3. what the pop-ups show, and how to add your own variables,
+4. saving plots as standalone HTML files, and
+5. the underlying data and use in Shiny.
+
+The interactive functions need two optional packages:
+
+```{r, eval = FALSE}
+install.packages(c("plotly", "htmlwidgets"))
+```
+
+## Example data
+
+We'll use 15 made-up census tracts. Each has a `GEOID`, housing units
+(all and affordable), median income (the opportunity indicator), land area,
+and two variables that aren't part of the FHLUS calculation: median rent and
+poverty rate.
+
+```{r data}
+
+ library(fhlus)
+
+set.seed(2024)
+n <- 15
+tracts <- data.frame(
+  GEOID            = sprintf("06037%06d", seq_len(n) * 100),
+  housing_units    = sample(80:900, n),
+  affordable_units = sample(0:120, n),
+  median_income    = round(runif(n, 35000, 150000), -2),
+  land_area        = round(runif(n, 0.4, 3.5), 2),
+  median_rent      = sample(1100:3400, n),
+  pct_poverty      = round(runif(n, 0.03, 0.35), 3)
+)
+head(tracts)
+```
+
+## How each geography appears on the curve
+
+`fhlus_score()` sorts the geographies from lowest to highest opportunity and
+plots their cumulative shares. **Each geography is one segment of the curve:**
+
+- the segment's **width** is the geography's share of the denominator (here,
+  land area), and
+- its **rise** is the geography's share of the numerator (here, housing units).
+
+The slope of a segment is therefore the geography's **concentration**: its share
+of units divided by its share of land. A concentration of 1.00× is exactly
+proportional. 2.00× means the tract holds twice the units its land area would
+imply, and 0.50× means half. Steep segments on the right (high opportunity)
+raise the FHLUS score; steep segments on the left lower it.
+
+## A single result
+
+```{r single}
+result <- fhlus_score(
+  tracts,
+  numerator   = "housing_units",
+  rank_var    = "median_income",
+  denom       = "land_area",
+  missing_pct = 0.10,
+  graph       = FALSE
+)
+
+fhlus_interactive(
+  result,
+  tooltip_vars  = c("Median rent" = "median_rent", "Poverty rate" = "pct_poverty"),
+  show_ci_bands = TRUE
+)
+```
+
+Hover over the red curve. The tract under the cursor is highlighted, its slice
+of the x-axis is shaded, and a pop-up shows:
+
+| Section | Contents |
+|---|---|
+| Header | The geography ID and its rank (1 = lowest opportunity) |
+| Values | Median income; housing units and land area, each with its share of the total; concentration |
+| Cumulative | Where the segment starts and ends on each axis, plus the CI range for the cumulative units |
+| Extra variables | Median rent and poverty rate |
+
+### Choosing the ID
+
+By default, `fhlus_interactive()` uses a column named `GEOID`, `geoid`,
+`GEOID20` or `GEOID10` if one exists. Otherwise it uses each geography's rank.
+To use a different identifier, such as a neighborhood name, set `id`:
+
+```{r id, eval = FALSE}
+fhlus_interactive(result, id = "neighborhood_name")
+```
+
+IDs should be unique; you'll get a warning if they aren't.
+
+### Adding other variables
+
+`tooltip_vars` accepts **any column of the data you passed to `fhlus_score()`**,
+whether or not it was used in the calculation. Named elements set the display
+label; unnamed elements use the column name:
+
+```{r tooltip-vars, eval = FALSE}
+fhlus_interactive(result, tooltip_vars = c("Median rent" = "median_rent", "pct_poverty"))
+```
+
+### Other options
+
+The interactive plot mirrors the static one, and takes many of the same
+arguments:
+
+- `show_ci_bands`, `ci_alpha`: CI ribbon (needs `missing` or `missing_pct`)
+- `title`, `subtitle`
+- `color_var`, `color_denom`: line colors (red and blue by default)
+- `boundary_label`: legend label for the boundary points; `NULL` hides them
+- `annotation`, `annotation_x`, `annotation_y`: the "FHLUS = X" label
+- `highlight = FALSE` turns off the hover highlight
+- `width`, `height`: size in pixels
+
+## Comparing two policies
+
+`fhlus_compare_interactive()` is the interactive counterpart to
+`fhlus_compare()`. Here we compare all housing with affordable housing:
+
+```{r compare}
+result_aff <- fhlus_score(
+  tracts,
+  numerator = "affordable_units",
+  rank_var  = "median_income",
+  denom     = "land_area",
+  graph     = FALSE
+)
+
+fhlus_compare_interactive(
+  result, result_aff,
+  label_a      = "All housing",
+  label_b      = "Affordable",
+  tooltip_vars = c("Median rent" = "median_rent", "Poverty rate" = "pct_poverty")
+)
+```
+
+Hovering shows **one pop-up per tract**:
+
+- **Shared details, shown once:** ID, rank, median income, land area, and the
+  extra variables.
+- **A block for each policy:** its unit count and share of the total, its
+  concentration, and where its curve segment starts and ends.
+- **Difference (A − B):**
+  - *Share of total*: how many percentage points more of policy A's units are
+    in this tract.
+  - *Concentration*: the difference in concentration.
+  - *Cumulative gap*: the vertical distance between the two curves at the end
+    of this tract.
+
+The tract is highlighted on both curves.
+
+When the two results use the same geographies and denominator, as here, the
+curves line up and there is a single hover target. If they don't (for example,
+different denominators), each curve gets its own hover target, and the pop-up
+is for the geography on whichever curve is closest. A geography that appears in
+only one result is marked *Not in this result*.
+
+## Saving as HTML
+
+Any interactive plot can be saved as an HTML file that opens in any web browser,
+without R:
+
+```{r save, eval = FALSE}
+w <- fhlus_interactive(result, tooltip_vars = c("Median rent" = "median_rent"))
+fhlus_save_html(w, "fhlus_tracts.html")
+
+# Or straight from a result; extra arguments go to fhlus_interactive()
+fhlus_save_html(result, "fhlus_tracts.html", tooltip_vars = "median_rent")
+
+# Comparisons: save the widget
+cmp <- fhlus_compare_interactive(result, result_aff)
+fhlus_save_html(cmp, "fhlus_comparison.html")
+```
+
+By default the file is **self-contained**: everything is embedded in that one
+file (about 4 MB, mostly the plotly library), so you can email or post it as-is.
+A single-file export needs pandoc, which comes with RStudio, Positron and
+Quarto. Without pandoc, `fhlus_save_html()` warns you and puts the supporting
+files in a `<name>_files/` folder next to the HTML. Keep that folder with the
+file.
+
+## The data behind the plot
+
+`fhlus_segments()` returns the per-geography table that the plots are built
+from:
+
+```{r segments, eval = TRUE}
+segs <- fhlus_segments(result, tooltip_vars = "median_rent")
+segs
+```
+
+| Column | Meaning |
+|---|---|
+| `id`, `rank` | Geography ID and rank (1 = lowest opportunity) |
+| `cum_denom_start`, `cum_denom_end` | Segment start/end on the x-axis |
+| `cum_var_start`, `cum_var_end` | Segment start/end on the y-axis |
+| `share_denom`, `share_var` | The geography's own share of the denominator/numerator |
+| `concentration` | `share_var / share_denom`; `NA` if the denominator share is 0 |
+| `cum_var_lowest`, `cum_var_highest` | Cumulative share under the two CI scenarios (only with `missing`/`missing_pct`) |
+| raw columns | Rank variable(s), numerator, denominator, excluded area, tie breakers, `tooltip_vars` |
+
+For example, to list the tracts most over- or under-represented relative to
+their land area:
+
+```{r top, eval = TRUE}
+segs[order(-segs$concentration), c("id", "median_income", "housing_units", "concentration")]
+```
+
+Because the table is keyed by geography ID, it joins directly to spatial data
+for mapping:
+
+```{r join, eval = FALSE}
+tracts_map <- dplyr::left_join(tracts_sf, segs, by = c("GEOID" = "id"))
+```
+
+## Using the plots in Shiny
+
+The plots are ordinary plotly widgets, so they work with `plotly::plotlyOutput()`
+and `plotly::renderPlotly()`. Every hover point carries the geography ID in
+`customdata`, so the app can react to the hovered geography. This is the basis
+for linking the curve to a map.
+
+```{r shiny, eval = FALSE}
+library(shiny)
+
+ui <- fluidPage(
+  plotly::plotlyOutput("curve"),
+  verbatimTextOutput("hovered")
+)
+
+server <- function(input, output, session) {
+  output$curve <- plotly::renderPlotly(
+    fhlus_interactive(result, tooltip_vars = "median_rent", source = "fhlus")
+  )
+  output$hovered <- renderPrint({
+    ev <- plotly::event_data("plotly_hover", source = "fhlus")
+    if (is.null(ev)) "Hover over the curve" else ev$customdata
+  })
+}
+
+shinyApp(ui, server)
+```
+
+## Tips
+
+- **Large inputs:** above 2,000 geographies, the plot automatically switches to
+  WebGL rendering so hovering stays responsive.
+- **Older results:** results from earlier fhlus versions don't record their
+  column names. Pass `numerator`, `denom` and `rank_var` to
+  `fhlus_interactive()` or `fhlus_segments()`.
+- **`fhlus_compare()` objects** don't keep the underlying data. For an
+  interactive comparison, pass the two `fhlus_score()` results to
+  `fhlus_compare_interactive()`.

@@ -43,6 +43,9 @@
 #'   \item{confidence_interval}{Numeric vector of length 2 with CI bounds, or NULL}
 #'   \item{data_lowest}{Data frame with CI lowest-bound cumulative distributions, or NULL}
 #'   \item{data_highest}{Data frame with CI highest-bound cumulative distributions, or NULL}
+#'   \item{meta}{List of the column names and settings used (numerator, denom,
+#'     rank_var, tie_breaker, exclude_area, missing). Used by
+#'     \code{fhlus_segments()} and \code{fhlus_interactive()}.}
 #'
 #' @examples
 #' # Create sample data
@@ -138,6 +141,14 @@ fhlus_score <- function(df,
 
   # Compile results
   results <- compile_results(base_result, ci_results, missing, plot_obj)
+  results$meta <- list(
+    numerator = numerator,
+    denom = denom,
+    rank_var = rank_var,
+    tie_breaker = tie_breaker,
+    exclude_area = if (!is.null(exclude_area) && exclude_area %in% names(df)) exclude_area else NULL,
+    missing = missing
+  )
 
   return(results)
 }

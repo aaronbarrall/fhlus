@@ -469,7 +469,8 @@ test_that("fhlus_score returns correct structure", {
 
   expect_s3_class(result, "fhlus")
   expect_type(result, "list")
-  expect_named(result, c("scores", "data", "plot", "auc", "confidence_interval"))
+  expect_named(result, c("scores", "data", "plot", "auc", "confidence_interval",
+                         "data_lowest", "data_highest", "meta"))
 })
 
 test_that("fhlus_score scores are in valid range", {

@@ -5,3 +5,16 @@
 ^CLAUDE\.md$
 ^cran-comments\.md$
 ^data-raw$
+^\.quarto$
+^_original_files$
+^fhlus-shiny$
+^fhlus_demo_files$
+^fhlus_demo\.qmd$
+^build_package\.R$
+^.*\.docx$
+^IMPLEMENTATION_SUMMARY\.md$
+^NEXT_STEPS\.md$
+^PACKAGE_READY\.md$
+^SHINY_APP_PLAN\.md$
+^R/\.Rhistory$
+^tests/testthat/Rplots\.pdf$
