@@ -1,6 +1,6 @@
 Package: fhlus
 Title: Fair Housing Land Use Score Calculation
-Version: 0.4.0.9000
+Version: 0.5.0
 Authors@R: c(
     person("Aaron Barrall",, email = "aaronbarrall@ucla.edu", role = c("aut", "cre"))
     )

@@ -120,6 +120,84 @@ fhlus_segments <- function(result, id = NULL, tooltip_vars = NULL,
   seg
 }
 
+#' Convert an FHLUS Result to a JSON-Ready List
+#'
+#' Flattens an FHLUS result into plain lists and data frames, with no ggplot
+#' or plotly objects, so it can be sent to a web front end. Pass the output to
+#' \code{jsonlite::toJSON(x, dataframe = "rows", auto_unbox = TRUE,
+#' na = "null", null = "null", digits = NA)}. Fields that can hold several values
+#' (\code{rank_var}, \code{tie_breaker}, \code{confidence_interval}) are
+#' wrapped in \code{I()} so they stay JSON arrays even when they have length 1.
+#'
+#' @inheritParams fhlus_segments
+#' @param tooltips Logical, whether to add a \code{tooltip} column holding the
+#'   escaped HTML tooltip for each segment (the same text
+#'   \code{fhlus_interactive()} shows).
+#'
+#' @return A list with elements:
+#'   \item{format_version}{Integer version of this structure (currently 1)}
+#'   \item{score}{The base FHLUS score}
+#'   \item{auc}{Area under the curve}
+#'   \item{scores}{Data frame with \code{type}, \code{score},
+#'     \code{percent_error}}
+#'   \item{confidence_interval}{Lowest and highest scores, or NULL}
+#'   \item{meta}{Column names and settings used in the calculation}
+#'   \item{id_col}{Name of the ID column, or NULL when rank is used as the ID}
+#'   \item{tooltip_vars}{Named list mapping display labels to columns}
+#'   \item{segments}{Data frame from \code{fhlus_segments()}, one row per
+#'     geography, plus \code{tooltip} when requested}
+#'
+#' @examples
+#' sample_data <- data.frame(
+#'   GEOID = sprintf("06037%06d", 1:10),
+#'   housing_units = c(100, 150, 200, 120, 180, 90, 160, 140, 110, 130),
+#'   median_income = c(45000, 62000, 38000, 71000, 55000,
+#'                     82000, 48000, 66000, 59000, 74000),
+#'   land_area = c(2.5, 3.1, 1.8, 2.9, 3.5, 2.2, 2.7, 3.3, 2.1, 2.8)
+#' )
+#' result <- fhlus_score(sample_data, numerator = "housing_units",
+#'                       rank_var = "median_income", denom = "land_area",
+#'                       graph = FALSE)
+#' x <- fhlus_to_list(result)
+#' if (requireNamespace("jsonlite", quietly = TRUE)) {
+#'   jsonlite::toJSON(x, dataframe = "rows", auto_unbox = TRUE,
+#'                    na = "null", null = "null", digits = NA)
+#' }
+#'
+#' @export
+fhlus_to_list <- function(result, id = NULL, tooltip_vars = NULL,
+                          tooltips = TRUE,
+                          numerator = NULL, denom = NULL, rank_var = NULL) {
+  seg <- fhlus_segments(result, id = id, tooltip_vars = tooltip_vars,
+                        numerator = numerator, denom = denom,
+                        rank_var = rank_var)
+  meta <- attr(seg, "fhlus_meta")
+
+  segments <- as.data.frame(seg)
+  attr(segments, "fhlus_meta") <- NULL
+  attr(segments, "id_col") <- NULL
+  attr(segments, "tooltip_vars") <- NULL
+  if (tooltips) {
+    segments$tooltip <- build_tooltips(seg)
+  }
+
+  meta$rank_var <- I(meta$rank_var)
+  if (!is.null(meta$tie_breaker)) meta$tie_breaker <- I(meta$tie_breaker)
+
+  list(
+    format_version = 1L,
+    score = base_score(result),
+    auc = result$auc,
+    scores = as.data.frame(result$scores),
+    confidence_interval = if (is.null(result$confidence_interval)) NULL
+                          else I(result$confidence_interval),
+    meta = meta,
+    id_col = attr(seg, "id_col"),
+    tooltip_vars = as.list(attr(seg, "tooltip_vars")),
+    segments = segments
+  )
+}
+
 #' Interactive FHLUS Plot
 #'
 #' Builds an interactive version of the FHLUS cumulative distribution plot.

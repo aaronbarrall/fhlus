@@ -1,4 +1,4 @@
-# fhlus (development version)
+# fhlus 0.5.0
 
 ## New Features
 
@@ -16,6 +16,18 @@
 ### Result Metadata
 
 * `fhlus_score()` results gain a `$meta` element recording the column names and settings used (`numerator`, `denom`, `rank_var`, `tie_breaker`, `exclude_area`, `missing`). Existing elements are unchanged.
+
+### JSON Output
+
+* New `fhlus_to_list()` flattens a result into plain lists and data frames (scores, CI, meta, and the `fhlus_segments()` table with HTML tooltips) for sending to a web front end with `jsonlite::toJSON()`.
+
+## Bug Fixes
+
+* `tie_breaker` was only applied when `verbose = TRUE`. It is now always applied, and also with multiple `rank_var`s. Scores computed with `tie_breaker` and `verbose = FALSE` (including through `grouped_fhlus()`) may change.
+* `fhlus_score()` now errors with a clear message when a `tie_breaker` column doesn't exist.
+* Rows with NA values in the numerator, denominator or rank variable(s), or infinite numerator/denominator values, are now dropped before scoring, as the warning always said. Previously they made the AUC calculation fail.
+* When every row has the same rank value, the score is now 0 (with a warning) instead of depending on the arbitrary row order.
+* `%>%` is now imported, so `grouped_fhlus()` printing, `analyze_grouped_fhlus()`, `calculate_multiple_indices()` and the spatial helpers work when the package is installed rather than sourced.
 
 ---
 

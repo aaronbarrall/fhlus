@@ -101,7 +101,10 @@ fhlus_score <- function(df,
                         verbose = TRUE) {
 
   # Input validation
-  validate_inputs(df, numerator, rank_var, denom, verbose)
+  validate_inputs(df, numerator, rank_var, denom, verbose, tie_breaker)
+
+  # Drop rows with NA or non-finite values in the required columns
+  df <- drop_incomplete_rows(df, numerator, rank_var, denom)
 
   # Adjust denominator for excluded areas if specified
   if (!is.null(exclude_area) && exclude_area %in% names(df)) {
@@ -127,6 +130,20 @@ fhlus_score <- function(df,
   ci_results <- NULL
   if (!is.null(missing) && missing > 0) {
     ci_results <- calculate_confidence_intervals(df, numerator, denom, missing, base_result)
+  }
+
+  # With no variation in the rank variable(s), the row order is arbitrary and
+  # no area is higher-opportunity than another, so the score is 0 by definition
+  if (nrow(unique(df[rank_var])) == 1 && !is.na(base_result$score)) {
+    if (verbose) {
+      warning("All rows share the same rank value. FHLUS is 0 by definition.")
+    }
+    base_result$score <- 0
+    if (!is.null(ci_results)) {
+      ci_results$lowest$score <- 0
+      ci_results$highest$score <- 0
+      ci_results$confidence_interval <- c(0, 0)
+    }
   }
 
   # Create visualization
@@ -155,7 +172,8 @@ fhlus_score <- function(df,
 
 #' Validate inputs for FHLUS calculation
 #' @noRd
-validate_inputs <- function(df, numerator, rank_var, denom, verbose) {
+validate_inputs <- function(df, numerator, rank_var, denom, verbose,
+                            tie_breaker = NULL) {
 
   # Check for empty data frame
   if (nrow(df) == 0) {
@@ -187,6 +205,17 @@ validate_inputs <- function(df, numerator, rank_var, denom, verbose) {
     stop(sprintf(
       "Missing rank columns: %s. Available columns: %s",
       paste(missing_rank, collapse = ", "),
+      paste(names(df), collapse = ", ")
+    ))
+  }
+
+  # Check tie breaker columns
+  missing_tb <- setdiff(tie_breaker, names(df))
+
+  if (length(missing_tb) > 0) {
+    stop(sprintf(
+      "Tie breaker columns not found: %s. Available columns: %s",
+      paste(missing_tb, collapse = ", "),
       paste(names(df), collapse = ", ")
     ))
   }
@@ -235,13 +264,20 @@ validate_inputs <- function(df, numerator, rank_var, denom, verbose) {
     ))
   }
 
-  # Check for NA values (warnings only)
+  # Check for NA and infinite values (warnings only)
   if (verbose) {
     na_counts <- sapply(df[c(numerator, rank_cols, denom)], function(x) sum(is.na(x)))
     if (any(na_counts > 0)) {
       warning(sprintf(
-        "NA values found in: %s. These will be excluded from calculations.",
+        "NA values found in: %s. These rows will be excluded from calculations.",
         paste(names(na_counts)[na_counts > 0], collapse = ", ")
+      ))
+    }
+    inf_counts <- sapply(df[c(numerator, denom)], function(x) sum(is.infinite(x)))
+    if (any(inf_counts > 0)) {
+      warning(sprintf(
+        "Infinite values found in: %s. These rows will be excluded from calculations.",
+        paste(names(inf_counts)[inf_counts > 0], collapse = ", ")
       ))
     }
   }
@@ -254,6 +290,23 @@ validate_inputs <- function(df, numerator, rank_var, denom, verbose) {
       n_zeros
     ))
   }
+}
+
+#' Drop rows with NA or non-finite required values
+#' @noRd
+drop_incomplete_rows <- function(df, numerator, rank_var, denom) {
+  keep <- is.finite(df[[numerator]]) & is.finite(df[[denom]])
+  for (col in rank_var) {
+    keep <- keep & !is.na(df[[col]])
+  }
+
+  df <- df[keep, , drop = FALSE]
+
+  if (nrow(df) < 2) {
+    stop("Fewer than 2 rows remain after removing NA and infinite values. Cannot compute FHLUS.")
+  }
+
+  return(df)
 }
 
 #' Adjust denominator for excluded areas
@@ -289,19 +342,23 @@ create_ranking <- function(df, rank_var, tie_breaker = NULL, verbose = TRUE) {
     if (verbose) {
       message("Multiple ranking variables provided. Using hierarchical ranking.")
     }
-    # Create composite ranking
-    df <- dplyr::arrange(df, !!!rlang::syms(rank_var))
+    # Create composite ranking (tie breakers apply after all rank variables)
+    df <- dplyr::arrange(df, !!!rlang::syms(c(rank_var, tie_breaker)))
   } else {
     # Single ranking variable
     df <- dplyr::arrange(df, !!rlang::sym(rank_var))
 
     # Check for ties
-    if (any(duplicated(df[[rank_var]])) && verbose) {
-      n_ties <- sum(duplicated(df[[rank_var]]))
-      warning(paste(n_ties, "tied values found in", rank_var))
+    if (any(duplicated(df[[rank_var]]))) {
+      if (verbose) {
+        n_ties <- sum(duplicated(df[[rank_var]]))
+        warning(paste(n_ties, "tied values found in", rank_var))
+      }
 
       if (!is.null(tie_breaker)) {
-        message(paste("Using tie breakers:", paste(tie_breaker, collapse = ", ")))
+        if (verbose) {
+          message(paste("Using tie breakers:", paste(tie_breaker, collapse = ", ")))
+        }
         # Apply tie breakers
         order_vars <- c(rank_var, tie_breaker)
         df <- dplyr::arrange(df, !!!rlang::syms(order_vars))

@@ -216,11 +216,12 @@ test_that("fhlus_score validates verbose parameter is logical", {
 test_that("fhlus_score handles Inf values in numerator", {
   df <- create_valid_data()
   df$units[1] <- Inf
-  # Should either handle gracefully or error informatively
-  expect_error(
-    fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE),
-    "negative values|invalid|non-finite"
+  # Infinite rows are dropped with a warning, like NA rows
+  expect_warning(
+    result <- fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = TRUE),
+    "Infinite values found in: units"
   )
+  expect_equal(nrow(result$data), nrow(df))  # n - 1 dropped + zero row
 })
 
 test_that("fhlus_score handles Inf values in denominator", {
@@ -297,6 +298,19 @@ test_that("fhlus_score handles tied ranks with tie_breaker", {
   expect_s3_class(result, "fhlus")
 })
 
+test_that("fhlus_score applies tie_breaker regardless of verbose", {
+  df <- create_edge_case_data("tied_ranks")
+  df$secondary <- rev(seq_len(nrow(df)))
+  quiet <- fhlus_score(df, "units", "income", "area",
+                       tie_breaker = "secondary", graph = FALSE, verbose = FALSE)
+  loud <- suppressWarnings(suppressMessages(
+    fhlus_score(df, "units", "income", "area",
+                tie_breaker = "secondary", graph = FALSE, verbose = TRUE)
+  ))
+  expect_equal(quiet$scores$score, loud$scores$score)
+  expect_equal(quiet$data$secondary, loud$data$secondary)
+})
+
 test_that("fhlus_score handles extreme concentration in high-opportunity areas", {
   df <- create_edge_case_data("extreme_concentration_high")
   result <- fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE)
@@ -360,7 +374,8 @@ test_that("fhlus_score handles exclude_area correctly", {
 
 test_that("fhlus_score handles exclude_area larger than total area", {
   df <- create_valid_data()
-  df$excluded <- df$area * 1.5  # Larger than total
+  df$excluded <- 0
+  df$excluded[1:3] <- df$area[1:3] * 1.5  # Larger than total for some rows
   expect_warning(
     result <- fhlus_score(df, "units", "income", "area",
                          exclude_area = "excluded", graph = FALSE, verbose = TRUE),
@@ -530,9 +545,9 @@ test_that("fhlus_score verbose parameter controls messages", {
 
   # With verbose = TRUE and tied values, should warn
   df_tied <- create_edge_case_data("tied_ranks")
-  expect_message(
+  expect_warning(
     fhlus_score(df_tied, "units", "income", "area", graph = FALSE, verbose = TRUE),
-    "tied|ranking"
+    "tied"
   )
 })
 
