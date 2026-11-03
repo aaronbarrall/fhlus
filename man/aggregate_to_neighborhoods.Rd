@@ -8,7 +8,8 @@ aggregate_to_neighborhoods(
   units_data,
   neighborhoods,
   unit_var,
-  neighborhood_id
+  neighborhood_id,
+  method = c("point_on_surface", "area_weighted")
 )
 }
 \arguments{
@@ -19,19 +20,26 @@ aggregate_to_neighborhoods(
 \item{unit_var}{Column name for units variable to aggregate}
 
 \item{neighborhood_id}{Column name for neighborhood identifier}
+
+\item{method}{How polygon features are assigned; see
+\code{\link{assign_to_neighborhoods}()}.}
 }
 \value{
-SF object (neighborhoods) with aggregated units and site counts
+SF object (neighborhoods) with aggregated units (\code{total_units})
+and site counts (\code{n_sites}); neighborhoods without units get 0.
 }
 \description{
-Aggregate spatial units to neighborhoods
+Sums a unit variable from point (or polygon) features into neighborhoods.
+This is a wrapper around \code{\link{assign_to_neighborhoods}()} kept for
+backward compatibility; new code should use that function or the
+\code{numerator} argument of \code{\link{prepare_spatial_fhlus}()}.
 }
 \examples{
 \donttest{
 # Requires sf package
 if (requireNamespace("sf", quietly = TRUE)) {
   # This example would require actual spatial data
-  # See package vignettes for complete examples
+  # See ?assign_to_neighborhoods for a complete example
 }
 }
 

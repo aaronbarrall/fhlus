@@ -1,3 +1,24 @@
+# fhlus (development version)
+
+## New Features
+
+### Boundary Clipping and Numerator Joins
+
+* `prepare_spatial_fhlus()` can now clip neighborhoods to a jurisdiction (`boundary`) and sum a spatial numerator layer into them (`numerator`, `numerator_vars`), in a fixed order: reproject, clip, calculate areas and exclusions, assign the numerator. It prints numbered progress steps (`verbose = TRUE`), and warns up front when a job looks slow (lat/lon data, very detailed boundary or exclusion layers, very large numerator layers).
+* With `boundary_id`, `prepare_spatial_fhlus()` clips to several jurisdictions at once and stacks the result, ready for `grouped_fhlus(group_var = boundary_id)`. A tract crossing two jurisdictions appears once in each, with its area split. It also works inside `lapply()` over jurisdictions.
+* New `clip_to_boundary()` clips neighborhoods to a boundary and adds `original_area` and `share_in_boundary`. Slivers under `min_share` (default 1%) of a tract's area are dropped.
+* New `assign_to_neighborhoods()` sums point or polygon numerators into neighborhoods. Every neighborhood is kept, with 0 where nothing falls. Polygons are assigned by `"point_on_surface"` (default) or split by `"area_weighted"` overlap. It reports how much was assigned and handles features outside every neighborhood with `outside = "warn"` / `"error"` / `"ignore"`.
+
+## Bug Fixes
+
+* `aggregate_to_neighborhoods()` now wraps `assign_to_neighborhoods()`. Previously a point on a shared tract edge was counted in both tracts, polygon features were counted in full in every tract they touched, and features outside every tract were dropped silently (they now trigger a warning).
+
+## Documentation
+
+* The README has a complete function reference and a longer spatial section.
+
+---
+
 # fhlus 0.5.0
 
 ## New Features
