@@ -48,38 +48,56 @@ print(result)
 result$scores
 ```
 
-## Key Features
+## Function Reference
 
-### Core Functionality
+Every function the package exports, grouped by task. Run `?function_name` for full documentation.
 
-- **`fhlus_score()`**: Calculate FHLUS for a single dataset
-- **`grouped_fhlus()`**: Calculate FHLUS for multiple groups (e.g., by city or county)
-- **`fhlus_compare()`**: Compare two FHLUS results on a single plot (e.g., policy alternatives)
-- **Confidence intervals**: Handle uncertainty with `missing` or `missing_pct` parameters
-- **CI ribbon bands**: Visualize confidence interval envelopes with `show_ci_bands = TRUE`
-- **Visualization**: Automatic generation of cumulative distribution curves
+### Calculating scores
 
-### Data Preparation
+| Function | What it does | Key arguments |
+|---|---|---|
+| `fhlus_score()` | Calculates FHLUS for one dataset and returns the score, AUC, cumulative curve data, plot and metadata. | `df`, `numerator`, `rank_var`, `denom`, `missing` / `missing_pct` (confidence interval), `tie_breaker`, `exclude_area`, `show_ci_bands`, `graph`, `verbose` |
+| `grouped_fhlus()` | Calculates FHLUS for every group (e.g., each city), one row per group with `score`, `score_lowest`, `score_highest`. Per-group error rates can come from a column. | `df`, `group_var`, the `fhlus_score()` arguments, `graph_subset`, `parallel` (needs `furrr`) |
+| `calculate_multiple_indices()` | Runs FHLUS for several opportunity measures (e.g., income and poverty) at once, optionally by group. Returns long and wide tables. | `data`, `indices` (named list of specs, each can set `ascending = FALSE`), `group_var` |
 
-- **`validate_fhlus_data()`**: Check data quality before calculation
-- **`prepare_spatial_fhlus()`**: Prepare spatial data with attribute-based or spatial layer exclusions (requires `sf` package)
-- **`aggregate_to_neighborhoods()`**: Aggregate point data to geographic units
-- **`spatial_impute()`**: Impute missing values using spatial neighbors
+### Preparing spatial data (requires `sf`)
 
-### Analysis & Comparison Tools
+| Function | What it does | Key arguments |
+|---|---|---|
+| `prepare_spatial_fhlus()` | One call for the whole spatial pipeline: reproject, clip neighborhoods to a jurisdiction, calculate `total_area` / `excluded_area` / `available_area`, and sum a spatial numerator into the neighborhoods. Prints numbered progress steps and warns when a job looks slow. | `spatial_data`, `area_crs`, `boundary`, `boundary_id`, `min_share`, `numerator`, `numerator_vars`, `numerator_method`, `exclude_zones` / `zone_column`, `exclude_layer`, `outside`, `verbose` |
+| `clip_to_boundary()` | Clips neighborhoods (e.g., tracts) to a boundary so only area inside the jurisdiction counts in the denominator. Adds `original_area` and `share_in_boundary`, and drops slivers. With `boundary_id`, clips to several jurisdictions at once and stacks the result. | `neighborhoods`, `boundary`, `boundary_id`, `min_share` |
+| `assign_to_neighborhoods()` | Sums a numerator layer (points or polygons) into neighborhoods. Every neighborhood is kept, with 0 where nothing falls. A point on a shared edge is counted once. It reports how much was assigned and what fell outside. | `numerator`, `neighborhoods`, `vars`, `method` (`"point_on_surface"` or `"area_weighted"`), `count_col`, `outside` |
+| `aggregate_to_neighborhoods()` | Older interface to `assign_to_neighborhoods()`, kept for existing scripts. Adds `total_units` and `n_sites`. | `units_data`, `neighborhoods`, `unit_var`, `neighborhood_id` |
+| `spatial_impute()` | Fills missing values from neighboring features (needs `spdep`). | `spatial_data`, `impute_var`, `method` (`"mean"`, `"median"`, `"idw"`), `k` |
+| `validate_fhlus_data()` | Checks a data frame before scoring: missing columns, NAs, negative values, too few rows. | `data`, `numerator`, `rank_var`, `denom` |
 
-- **`fhlus_compare()`**: Side-by-side policy comparison with overlaid curves and CI bands
-- **`analyze_grouped_fhlus()`**: Comparative analysis with correlations
-- **`plot_grouped_fhlus()`**: Visualize grouped results
-- **`calculate_multiple_indices()`**: Analyze multiple opportunity metrics
-- **`export_fhlus()`**: Export to CSV, Excel, JSON, or RDS
+### Comparing and analyzing results
 
-### Interactive Plots
+| Function | What it does | Key arguments |
+|---|---|---|
+| `fhlus_compare()` | Overlays two results on one plot (e.g., all housing vs. affordable housing) with labeled scores, their difference, and optional CI ribbons. | `result_a`, `result_b`, `label_a`, `label_b`, `show_ci`, `rank_var` |
+| `analyze_grouped_fhlus()` | Joins grouped scores to group characteristics (e.g., city size) and reports correlations. | `grouped_results`, `group_characteristics`, `join_by` |
+| `plot_grouped_fhlus()` | Bar chart of grouped scores. | `grouped_results`, `score_col`, `n_groups`, `highlight_groups` |
 
-- **`fhlus_interactive()`**: Hover over each geography's segment of the curve to see its ID, rank, values, shares, concentration and any other variables
-- **`fhlus_compare_interactive()`**: Interactive policy comparison, with one combined pop-up per geography
-- **`fhlus_save_html()`**: Save an interactive plot as a standalone HTML file
-- **`fhlus_segments()`**: Per-geography table behind the plots (for your own analysis or for joining to maps)
+### Interactive plots (require `plotly` and `htmlwidgets`)
+
+| Function | What it does | Key arguments |
+|---|---|---|
+| `fhlus_interactive()` | Interactive version of the FHLUS plot. Hovering shows each geography's ID, rank, values, shares, concentration and any extra variables. | `result`, `id`, `tooltip_vars`, `show_ci_bands` |
+| `fhlus_compare_interactive()` | Interactive version of `fhlus_compare()`, with one combined pop-up per geography. | `result_a`, `result_b`, `label_a`, `label_b`, `id`, `tooltip_vars`, `show_ci` |
+| `fhlus_save_html()` | Saves an interactive plot (or a result directly) as a standalone HTML file. | `x`, `file`, `selfcontained` |
+| `fhlus_segments()` | The per-geography table behind the interactive plots, for your own analysis or joining to maps. | `result`, `id`, `tooltip_vars` |
+
+### Exporting
+
+| Function | What it does | Key arguments |
+|---|---|---|
+| `export_fhlus()` | Writes a result, grouped result or data frame to CSV, Excel (with plot; needs `openxlsx`), JSON (needs `jsonlite`) or RDS. | `results`, `filename`, `format`, `include_plot` |
+| `fhlus_to_list()` | Converts a result to plain lists and data frames ready for `jsonlite::toJSON()` (used by the web app). | `result`, `id`, `tooltip_vars` |
+
+### Print methods
+
+`print()` has methods for `fhlus` (score summary and plot), `grouped_fhlus` (summary statistics and top/bottom groups), `fhlus_compare` (both scores and the plot) and `fhlus_segments` (one-line summary and the table).
 
 ## Example: Grouped Analysis
 
@@ -419,9 +437,96 @@ Minimum requirements:
 
 ## Spatial Data Support
 
+`prepare_spatial_fhlus()` turns spatial layers into a table that `fhlus_score()` can use. It always runs its steps in this order, so the denominator and numerator line up:
+
+1. Reproject everything to `area_crs`. Use a projected CRS in meters or feet, not lat/lon.
+2. Clip the neighborhoods to the jurisdiction `boundary` (optional). A tract that is half inside the city counts only its inside half.
+3. Calculate `total_area`, `excluded_area` and `available_area`.
+4. Sum the `numerator` layer into the neighborhoods (optional).
+
+### Clipping to a jurisdiction and joining the numerator
+
+The numerator can be points (e.g., project locations) or polygons (e.g., parcels). The neighborhoods are always the destination of the join. Every tract is kept, and tracts with no projects get 0. A common mistake is joining tracts onto the points (`st_join(points, tracts)`), which silently drops every tract with no projects and biases the score.
+
 ```r
 library(sf)
 
+tracts   <- st_read("tracts.shp")      # rank variables live here (e.g., median_income)
+city     <- st_read("city_limits.shp")
+projects <- st_read("projects.shp")    # points with a net_units column
+
+prepared <- prepare_spatial_fhlus(
+  spatial_data   = tracts,
+  area_crs       = 2229,               # a projected CRS for your region
+  boundary       = city,
+  numerator      = projects,
+  numerator_vars = c(units = "net_units")  # name = output column
+)
+# Progress output (numbers are illustrative):
+#> [1/4] Preparing 2,498 neighborhoods (transforming CRS)... (0.0s)
+#> [2/4] Clipping 2,498 neighborhoods to the boundary... (0.4s)
+#> Clipped to boundary: 1,004 of 2,498 neighborhoods kept as 1,004 piece(s), 61 of them clipped at the boundary; dropped 23 sliver(s) under 1% of their area
+#> [3/4] Calculating areas and exclusions... (1.9s)
+#> [4/4] Assigning 3,120 numerator features to neighborhoods... (2.0s)
+#> 412 of 3,120 numerator features are outside the boundary and were dropped
+#> Assigned 2,708 of 2,708 numerator features (point method) to 655 of 1,004 neighborhoods; units: 41,870 of 41,870
+#> Spatial preparation finished in 2.3s
+
+result <- fhlus_score(
+  df = st_drop_geometry(prepared),
+  numerator = "units",
+  rank_var = "median_income",
+  denom = "available_area"
+)
+```
+
+Things to know:
+
+- **Polygon numerators.** By default (`numerator_method = "point_on_surface"`) each parcel goes wholly to the tract that contains a point inside it. This is right when parcels are much smaller than tracts. Use `"area_weighted"` to split each polygon's values by overlap area. That suits large sites or zones that cross tract lines.
+- **Slivers.** Tract and city lines rarely match exactly. Pieces covering less than `min_share` (default 1%) of their tract are dropped. Use `min_share = 0` to keep them all.
+- **Rank variables** (income, poverty, etc.) keep their whole-tract values on clipped tracts.
+- **Features outside the neighborhoods.** Features outside the boundary are expected and only reported. Features inside the boundary that miss every tract trigger a warning. Use `outside = "error"` to stop instead, or `"ignore"` to stay quiet. `attr(x, "assignment_summary")` on the output of `assign_to_neighborhoods()` shows the totals.
+- **Slow jobs.** You get a warning up front when a job looks slow: lat/lon data, very detailed boundary or exclusion layers, or very large numerator layers. Set `verbose = FALSE` to silence the progress messages.
+
+The steps are also available on their own: `clip_to_boundary()` and `assign_to_neighborhoods()`.
+
+### Several jurisdictions at once
+
+Pass a boundary layer with one feature per jurisdiction and name its ID column in `boundary_id`. Each jurisdiction is clipped separately, and the output stacks them with that column added. A tract crossing two cities appears once in each, with its area split. The result goes straight into `grouped_fhlus()`:
+
+```r
+cities <- st_read("cities.shp")        # one polygon per city, with a `city_name` column
+
+prepared <- prepare_spatial_fhlus(
+  tracts, area_crs = 2229,
+  boundary = cities, boundary_id = "city_name",
+  numerator = projects, numerator_vars = c(units = "net_units")
+)
+
+grouped_fhlus(
+  st_drop_geometry(prepared),
+  group_var = "city_name",
+  numerator = "units",
+  rank_var = "median_income",
+  denom = "available_area"
+)
+```
+
+If you'd rather loop yourself, the function works inside `lapply()`:
+
+```r
+per_city <- lapply(split(cities, cities$city_name), function(b) {
+  prepared <- prepare_spatial_fhlus(tracts, area_crs = 2229, boundary = b,
+                                    numerator = projects,
+                                    numerator_vars = c(units = "net_units"))
+  fhlus_score(st_drop_geometry(prepared), "units", "median_income",
+              "available_area", graph = FALSE)
+})
+```
+
+### Excluding land from the denominator
+
+```r
 # Read spatial data
 tracts_sf <- st_read("tracts.shp")
 
@@ -450,9 +555,13 @@ tracts_prepared <- prepare_spatial_fhlus(
   exclude_layer = parks_sf
 )
 
+# Exclusions combine with boundary and numerator:
+# prepare_spatial_fhlus(tracts_sf, area_crs = 3857, boundary = city,
+#                       exclude_layer = parks_sf, numerator = projects, ...)
+
 # Calculate FHLUS
 result <- fhlus_score(
-  df = tracts_prepared,
+  df = st_drop_geometry(tracts_prepared),
   numerator = "housing_units",
   rank_var = "median_income",
   denom = "available_area"  # Created by prepare_spatial_fhlus

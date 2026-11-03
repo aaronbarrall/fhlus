@@ -9,11 +9,21 @@ prepare_spatial_fhlus(
   area_crs = NULL,
   exclude_zones = NULL,
   zone_column = NULL,
-  exclude_layer = NULL
+  exclude_layer = NULL,
+  boundary = NULL,
+  boundary_id = NULL,
+  min_share = 0.01,
+  numerator = NULL,
+  numerator_vars = NULL,
+  numerator_method = c("point_on_surface", "area_weighted"),
+  count_col = "n_features",
+  outside = c("warn", "error", "ignore"),
+  verbose = TRUE
 )
 }
 \arguments{
-\item{spatial_data}{SF object with spatial data}
+\item{spatial_data}{SF object with the neighborhood polygons (e.g., tracts)
+and their attributes (rank variables etc.)}
 
 \item{area_crs}{CRS for area calculations (default: use existing CRS, but warn if geographic)}
 
@@ -25,9 +35,48 @@ prepare_spatial_fhlus(
 (e.g., parks, open space). The layer is dissolved and intersected with source features to
 calculate actual excluded area per feature. Can be used alone or combined with attribute-based
 exclusion (\code{exclude_zones}/\code{zone_column}), in which case exclusions are additive.}
+
+\item{boundary}{Optional SF polygon layer (e.g., a city boundary). Neighborhoods
+are clipped to it with \code{\link{clip_to_boundary}()}, so areas only count
+the part inside the boundary. See \code{boundary_id} for several jurisdictions.}
+
+\item{boundary_id}{Optional column in \code{boundary} naming each jurisdiction.
+When given, each jurisdiction is clipped separately and the result is stacked,
+with this column identifying the jurisdiction (a neighborhood crossing two
+jurisdictions appears once in each). Pass it as \code{group_var} to
+\code{\link{grouped_fhlus}()}.}
+
+\item{min_share}{Neighborhood pieces covering less than this share of the
+original neighborhood's area are dropped as slivers (default 0.01 = 1\\%).
+Use 0 to keep every piece.}
+
+\item{numerator}{Optional SF layer of numerator features (points, or polygons
+such as parcels) to sum into the neighborhoods with
+\code{\link{assign_to_neighborhoods}()}.}
+
+\item{numerator_vars}{Columns of \code{numerator} to sum. A named vector
+renames the output (e.g., \code{c(total_units = "units")}). If \code{NULL},
+only the feature count is added.}
+
+\item{numerator_method}{How polygon numerators are assigned:
+\code{"point_on_surface"} (default) or \code{"area_weighted"}. See
+\code{\link{assign_to_neighborhoods}()}.}
+
+\item{count_col}{Name of the column holding the number of numerator features
+per neighborhood (default \code{"n_features"}).}
+
+\item{outside}{What to do when numerator features inside the boundary fall
+outside every neighborhood: \code{"warn"} (default), \code{"error"} or
+\code{"ignore"}. Features outside the \code{boundary} itself are expected
+and only reported in a message.}
+
+\item{verbose}{Print progress messages for each step (default \code{TRUE}).}
 }
 \value{
-SF object with calculated total_area, excluded_area, and available_area columns
+SF object with calculated total_area, excluded_area, and available_area
+columns. With a \code{boundary}, also \code{original_area} and
+\code{share_in_boundary} (and the \code{boundary_id} column). With a
+\code{numerator}, also the summed \code{numerator_vars} and \code{count_col}.
 }
 \description{
 Helper functions for FHLUS calculations including spatial operations
@@ -58,6 +107,17 @@ if (requireNamespace("sf", quietly = TRUE)) {
   #   area_crs = 3857,
   #   exclude_layer = park
   # )
+
+  # Clip tracts to a city and sum project points into them
+  # prepared <- prepare_spatial_fhlus(
+  #   tracts,
+  #   area_crs = 2229,
+  #   boundary = city,
+  #   numerator = projects,
+  #   numerator_vars = c(units = "net_units")
+  # )
+  # fhlus_score(sf::st_drop_geometry(prepared), "units", "median_income",
+  #             "available_area")
 }
 }
 

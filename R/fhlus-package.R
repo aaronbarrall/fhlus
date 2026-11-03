@@ -97,4 +97,5 @@
 #'
 #' @docType package
 #' @name fhlus-package
+#' @importFrom dplyr %>%
 NULL

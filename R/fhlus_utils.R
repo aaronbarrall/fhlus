@@ -8,7 +8,20 @@
 
 #' Prepare spatial data for FHLUS calculation
 #'
-#' @param spatial_data SF object with spatial data
+#' Runs the spatial steps needed before \code{fhlus_score()} in a fixed order,
+#' so the denominator and numerator are built consistently:
+#' \enumerate{
+#'   \item reproject everything to \code{area_crs};
+#'   \item clip the neighborhoods to a jurisdictional \code{boundary} (optional);
+#'   \item calculate \code{total_area}, \code{excluded_area} and \code{available_area};
+#'   \item sum a spatial \code{numerator} layer (points or polygons) into the
+#'     neighborhoods (optional).
+#' }
+#' The neighborhoods are always the destination of the numerator join: every
+#' neighborhood is kept, with 0 where no numerator features fall.
+#'
+#' @param spatial_data SF object with the neighborhood polygons (e.g., tracts)
+#'   and their attributes (rank variables etc.)
 #' @param area_crs CRS for area calculations (default: use existing CRS, but warn if geographic)
 #' @param exclude_zones Vector of zone types to exclude (e.g., "Open space")
 #' @param zone_column Column name containing zone information
@@ -16,8 +29,38 @@
 #'   (e.g., parks, open space). The layer is dissolved and intersected with source features to
 #'   calculate actual excluded area per feature. Can be used alone or combined with attribute-based
 #'   exclusion (\code{exclude_zones}/\code{zone_column}), in which case exclusions are additive.
+#' @param boundary Optional SF polygon layer (e.g., a city boundary). Neighborhoods
+#'   are clipped to it with \code{\link{clip_to_boundary}()}, so areas only count
+#'   the part inside the boundary. See \code{boundary_id} for several jurisdictions.
+#' @param boundary_id Optional column in \code{boundary} naming each jurisdiction.
+#'   When given, each jurisdiction is clipped separately and the result is stacked,
+#'   with this column identifying the jurisdiction (a neighborhood crossing two
+#'   jurisdictions appears once in each). Pass it as \code{group_var} to
+#'   \code{\link{grouped_fhlus}()}.
+#' @param min_share Neighborhood pieces covering less than this share of the
+#'   original neighborhood's area are dropped as slivers (default 0.01 = 1\%).
+#'   Use 0 to keep every piece.
+#' @param numerator Optional SF layer of numerator features (points, or polygons
+#'   such as parcels) to sum into the neighborhoods with
+#'   \code{\link{assign_to_neighborhoods}()}.
+#' @param numerator_vars Columns of \code{numerator} to sum. A named vector
+#'   renames the output (e.g., \code{c(total_units = "units")}). If \code{NULL},
+#'   only the feature count is added.
+#' @param numerator_method How polygon numerators are assigned:
+#'   \code{"point_on_surface"} (default) or \code{"area_weighted"}. See
+#'   \code{\link{assign_to_neighborhoods}()}.
+#' @param count_col Name of the column holding the number of numerator features
+#'   per neighborhood (default \code{"n_features"}).
+#' @param outside What to do when numerator features inside the boundary fall
+#'   outside every neighborhood: \code{"warn"} (default), \code{"error"} or
+#'   \code{"ignore"}. Features outside the \code{boundary} itself are expected
+#'   and only reported in a message.
+#' @param verbose Print progress messages for each step (default \code{TRUE}).
 #'
-#' @return SF object with calculated total_area, excluded_area, and available_area columns
+#' @return SF object with calculated total_area, excluded_area, and available_area
+#'   columns. With a \code{boundary}, also \code{original_area} and
+#'   \code{share_in_boundary} (and the \code{boundary_id} column). With a
+#'   \code{numerator}, also the summed \code{numerator_vars} and \code{count_col}.
 #'
 #' @examples
 #' \donttest{
@@ -45,6 +88,17 @@
 #'   #   area_crs = 3857,
 #'   #   exclude_layer = park
 #'   # )
+#'
+#'   # Clip tracts to a city and sum project points into them
+#'   # prepared <- prepare_spatial_fhlus(
+#'   #   tracts,
+#'   #   area_crs = 2229,
+#'   #   boundary = city,
+#'   #   numerator = projects,
+#'   #   numerator_vars = c(units = "net_units")
+#'   # )
+#'   # fhlus_score(sf::st_drop_geometry(prepared), "units", "median_income",
+#'   #             "available_area")
 #' }
 #' }
 #'
@@ -53,12 +107,19 @@ prepare_spatial_fhlus <- function(spatial_data,
                                   area_crs = NULL,
                                   exclude_zones = NULL,
                                   zone_column = NULL,
-                                  exclude_layer = NULL) {
+                                  exclude_layer = NULL,
+                                  boundary = NULL,
+                                  boundary_id = NULL,
+                                  min_share = 0.01,
+                                  numerator = NULL,
+                                  numerator_vars = NULL,
+                                  numerator_method = c("point_on_surface", "area_weighted"),
+                                  count_col = "n_features",
+                                  outside = c("warn", "error", "ignore"),
+                                  verbose = TRUE) {
 
   # Check if sf package is available
-  if (!requireNamespace("sf", quietly = TRUE)) {
-    stop("Package 'sf' required for spatial operations. Install with install.packages('sf').")
-  }
+  check_sf()
 
   # Validate input
   if (!inherits(spatial_data, "sf")) {
@@ -70,36 +131,61 @@ prepare_spatial_fhlus <- function(spatial_data,
 
   # Validate exclude_layer if provided
   if (!is.null(exclude_layer)) {
-    if (!inherits(exclude_layer, "sf")) {
-      stop(sprintf(
-        "exclude_layer must be an sf object. Got class: %s.",
-        paste(class(exclude_layer), collapse = ", ")
-      ))
-    }
-    geom_types <- unique(as.character(sf::st_geometry_type(exclude_layer)))
-    valid_types <- c("POLYGON", "MULTIPOLYGON")
-    if (!all(geom_types %in% valid_types)) {
-      stop(sprintf(
-        "exclude_layer must contain polygon geometries (POLYGON or MULTIPOLYGON). Got: %s.",
-        paste(geom_types, collapse = ", ")
-      ))
-    }
+    check_polygon_layer(exclude_layer, "exclude_layer")
+  }
+  if (!is.null(boundary)) {
+    check_polygon_layer(boundary, "boundary")
+  } else if (!is.null(boundary_id)) {
+    stop("boundary_id was given without a boundary.")
+  }
+  if (!is.null(numerator)) {
+    numerator_method <- match.arg(numerator_method)
+    outside <- match.arg(outside)
+    check_numerator_layer(numerator, numerator_vars)
   }
 
+  # Messages from the helpers follow verbose
+  quietly <- function(expr) if (verbose) expr else suppressMessages(expr)
+
+  n_steps <- 2L + (!is.null(boundary)) + (!is.null(numerator))
+  progress <- spatial_progress(n_steps, verbose)
+
+  warn_spatial_workload(spatial_data, area_crs, boundary, exclude_layer,
+                        numerator, numerator_method)
+
   # Transform to appropriate CRS for area calculation if needed
+  progress$step(sprintf("Preparing %s neighborhoods%s",
+                        format_count(nrow(spatial_data)),
+                        if (!is.null(area_crs)) " (transforming CRS)" else ""))
   if (!is.null(area_crs)) {
     spatial_data <- sf::st_transform(spatial_data, area_crs)
   } else if (sf::st_is_longlat(spatial_data)) {
     warning("Data is in geographic CRS (lat/lon). Areas may be inaccurate. Consider providing area_crs (e.g., a local UTM zone).")
   }
 
+  # Clip to the jurisdictional boundary
+  if (!is.null(boundary)) {
+    progress$step(sprintf(
+      "Clipping %s neighborhoods to the boundary%s",
+      format_count(nrow(spatial_data)),
+      if (!is.null(boundary_id)) {
+        sprintf(" (%d jurisdictions)", length(unique(boundary[[boundary_id]])))
+      } else ""
+    ))
+    spatial_data <- quietly(clip_to_boundary(
+      spatial_data, boundary,
+      boundary_id = boundary_id, min_share = min_share, verbose = verbose
+    ))
+  }
+
   # Calculate total area
+  progress$step("Calculating areas and exclusions")
   spatial_data$total_area <- as.numeric(sf::st_area(spatial_data))
 
   # Align exclude_layer CRS after spatial_data has been transformed
   if (!is.null(exclude_layer)) {
     if (sf::st_crs(exclude_layer) != sf::st_crs(spatial_data)) {
-      message("Transforming exclude_layer to match spatial_data CRS")
+      quietly(message("Transforming exclude_layer to match spatial_data CRS"))
       exclude_layer <- sf::st_transform(exclude_layer, sf::st_crs(spatial_data))
     }
   }
@@ -114,12 +200,12 @@ prepare_spatial_fhlus <- function(spatial_data,
 
     # Apply attribute-based exclusion if applicable
     if (has_attribute_exclusion) {
-      spatial_data <- calculate_excluded_areas(spatial_data, exclude_zones, zone_column)
+      spatial_data <- quietly(calculate_excluded_areas(spatial_data, exclude_zones, zone_column))
     }
 
     # Apply spatial layer exclusion if applicable (additive)
     if (has_layer_exclusion) {
-      spatial_data <- calculate_excluded_areas_spatial(spatial_data, exclude_layer)
+      spatial_data <- quietly(calculate_excluded_areas_spatial(spatial_data, exclude_layer))
     }
 
     # Recalculate available_area, capped at 0
@@ -130,7 +216,440 @@ prepare_spatial_fhlus <- function(spatial_data,
     spatial_data$available_area <- spatial_data$total_area
   }
 
+  # Sum the numerator into the (clipped) neighborhoods
+  if (!is.null(numerator)) {
+    progress$step(sprintf("Assigning %s numerator features to neighborhoods",
+                          format_count(nrow(numerator))))
+
+    if (!is.null(boundary)) {
+      # Features outside the boundary are expected; drop them up front so
+      # only genuine gaps trigger the outside warning
+      numerator <- quietly(drop_outside_boundary(numerator, boundary,
+                                                 sf::st_crs(spatial_data),
+                                                 numerator_method))
+    }
+
+    spatial_data <- quietly(assign_to_neighborhoods(
+      numerator, spatial_data,
+      vars = numerator_vars, method = numerator_method,
+      count_col = count_col, outside = outside, verbose = verbose
+    ))
+  }
+
+  progress$done()
+
   return(spatial_data)
+}
+
+#' Clip neighborhoods to a jurisdictional boundary
+#'
+#' Intersects neighborhood polygons (e.g., tracts) with a boundary (e.g., a city)
+#' and keeps only the part of each neighborhood inside it, so areas calculated
+#' afterwards count only land within the jurisdiction. Attributes such as rank
+#' variables are kept at their original (whole-neighborhood) values.
+#'
+#' @param neighborhoods SF polygon layer (e.g., tracts).
+#' @param boundary SF polygon layer. Without \code{boundary_id} it is dissolved
+#'   into a single area.
+#' @param boundary_id Optional column in \code{boundary} naming each
+#'   jurisdiction. Each jurisdiction is dissolved and clipped separately, and the
+#'   pieces are stacked with this column added; a neighborhood that crosses two
+#'   jurisdictions appears once in each.
+#' @param min_share Pieces covering less than this share of the original
+#'   neighborhood's area are dropped as slivers (default 0.01). Use 0 to keep all.
+#' @param verbose Print a summary of what was clipped (default \code{TRUE}).
+#'
+#' @return SF object with one row per neighborhood piece inside the boundary,
+#'   and new columns \code{original_area} (area before clipping) and
+#'   \code{share_in_boundary} (clipped area / original area), plus
+#'   \code{boundary_id} when given. Areas are in the units of the CRS, so use a
+#'   projected CRS.
+#'
+#' @examples
+#' \donttest{
+#' if (requireNamespace("sf", quietly = TRUE)) {
+#'   sq <- function(x, y) sf::st_polygon(list(rbind(
+#'     c(x, y), c(x + 1, y), c(x + 1, y + 1), c(x, y + 1), c(x, y))))
+#'   tracts <- sf::st_sf(id = 1:2, geometry = sf::st_sfc(sq(0, 0), sq(1, 0)),
+#'                       crs = 3857)
+#'   city <- sf::st_sf(name = "City",
+#'                     geometry = sf::st_sfc(sf::st_buffer(sf::st_point(c(1, 0.5)), 0.6)),
+#'                     crs = 3857)
+#'   clip_to_boundary(tracts, city)
+#' }
+#' }
+#'
+#' @export
+clip_to_boundary <- function(neighborhoods,
+                             boundary,
+                             boundary_id = NULL,
+                             min_share = 0.01,
+                             verbose = TRUE) {
+
+  check_sf()
+  check_polygon_layer(neighborhoods, "neighborhoods")
+  check_polygon_layer(boundary, "boundary")
+
+  if (!is.numeric(min_share) || length(min_share) != 1 || is.na(min_share) ||
+      min_share < 0 || min_share >= 1) {
+    stop("min_share must be a single number between 0 and 1 (e.g., 0.01).")
+  }
+
+  new_cols <- c("original_area", "share_in_boundary", boundary_id)
+  clash <- intersect(new_cols, names(neighborhoods))
+  if (length(clash) > 0) {
+    stop(sprintf(
+      "neighborhoods already has column(s) %s, which clip_to_boundary() would add. Rename or drop them first.",
+      paste0("'", clash, "'", collapse = ", ")
+    ))
+  }
+  if (!is.null(boundary_id) && !boundary_id %in% names(boundary)) {
+    stop(sprintf(
+      "boundary_id '%s' not found in boundary. Available columns: %s",
+      boundary_id, paste(setdiff(names(boundary), attr(boundary, "sf_column")), collapse = ", ")
+    ))
+  }
+
+  if (sf::st_crs(boundary) != sf::st_crs(neighborhoods)) {
+    message("Transforming boundary to match neighborhoods CRS")
+    boundary <- sf::st_transform(boundary, sf::st_crs(neighborhoods))
+  }
+  if (isTRUE(sf::st_is_longlat(neighborhoods))) {
+    warning("neighborhoods are in a geographic CRS (lat/lon); clipped areas use spherical geometry and may be slow. Consider a projected CRS.",
+            call. = FALSE)
+  }
+
+  neighborhoods <- sf::st_make_valid(neighborhoods)
+  boundary <- sf::st_make_valid(boundary)
+
+  neighborhoods$.__fhlus_id <- seq_len(nrow(neighborhoods))
+  neighborhoods$original_area <- as.numeric(sf::st_area(neighborhoods))
+
+  # Dissolve the boundary (per jurisdiction if boundary_id is given)
+  dissolved <- dissolve_boundary(boundary, boundary_id)
+
+  pieces <- suppressWarnings(sf::st_intersection(neighborhoods, dissolved))
+  pieces <- keep_polygon_pieces(pieces, c(".__fhlus_id", boundary_id))
+
+  if (nrow(pieces) > 0) {
+    pieces$share_in_boundary <- pmin(
+      as.numeric(sf::st_area(pieces)) / pieces$original_area, 1
+    )
+    pieces$share_in_boundary[!is.finite(pieces$share_in_boundary)] <- 0
+  } else {
+    pieces$share_in_boundary <- numeric(0)
+  }
+
+  # Drop slivers
+  slivers <- pieces$share_in_boundary < min_share
+  n_slivers <- sum(slivers)
+  pieces <- pieces[!slivers, ]
+
+  if (nrow(pieces) == 0) {
+    warning("No neighborhoods remain inside the boundary. Check that both layers cover the same place and CRS.",
+            call. = FALSE)
+  }
+
+  if (verbose) {
+    n_kept <- length(unique(pieces$.__fhlus_id))
+    n_partial <- sum(pieces$share_in_boundary < 1 - 1e-6)
+    message(sprintf(
+      "Clipped to boundary: %s of %s neighborhoods kept as %s piece(s), %s of them clipped at the boundary%s",
+      format_count(n_kept), format_count(nrow(neighborhoods)), format_count(nrow(pieces)),
+      format_count(n_partial),
+      if (n_slivers > 0) {
+        sprintf("; dropped %s sliver(s) under %s of their area", format_count(n_slivers),
+                paste0(format(min_share * 100), "%"))
+      } else ""
+    ))
+    if (!is.null(boundary_id)) {
+      n_split <- sum(table(pieces$.__fhlus_id) > 1)
+      if (n_split > 0) {
+        message(sprintf("%s neighborhood(s) are split between jurisdictions",
+                        format_count(n_split)))
+      }
+    }
+  }
+
+  # Original order, temp columns removed, multipolygon geometry
+  pieces <- pieces[order(pieces$.__fhlus_id), ]
+  pieces$.__fhlus_id <- NULL
+  pieces$.__fhlus_bnd <- NULL
+  pieces <- sf::st_cast(pieces, "MULTIPOLYGON", warn = FALSE)
+  rownames(pieces) <- NULL
+
+  geometry_last(pieces)
+}
+
+#' Sum numerator features (points or polygons) into neighborhoods
+#'
+#' Assigns each numerator feature (e.g., a housing project point or a parcel) to
+#' the neighborhood it falls in and sums the chosen variables per neighborhood.
+#' The neighborhoods are the destination: every neighborhood is returned, with 0
+#' where no features fall, so none are lost (the common mistake is joining
+#' neighborhoods onto the points, which drops neighborhoods with no features).
+#'
+#' \strong{Points} are assigned to exactly one neighborhood. A point on a shared
+#' edge goes to the first matching neighborhood, so it is never counted twice.
+#'
+#' \strong{Polygons} are assigned with \code{method}:
+#' \describe{
+#'   \item{\code{"point_on_surface"}}{(default) each polygon goes wholly to the
+#'     neighborhood containing \code{sf::st_point_on_surface()} of it. Best when
+#'     the polygons (e.g., parcels) are much smaller than the neighborhoods.}
+#'   \item{\code{"area_weighted"}}{each polygon's values are split between the
+#'     neighborhoods it overlaps, in proportion to the overlapping area. Use it
+#'     for large sites or zones that cross neighborhood lines. Values are assumed
+#'     to be spread evenly over each polygon.}
+#' }
+#'
+#' Neighborhoods should not overlap each other. The result reports how much of
+#' each variable was assigned, and features that fall outside every
+#' neighborhood are handled according to \code{outside}.
+#'
+#' @param numerator SF layer of POINT/MULTIPOINT or POLYGON/MULTIPOLYGON features.
+#' @param neighborhoods SF polygon layer (e.g., tracts, possibly clipped with
+#'   \code{\link{clip_to_boundary}()}).
+#' @param vars Numeric columns of \code{numerator} to sum. A named vector
+#'   renames the output (e.g., \code{c(total_units = "units")}). If \code{NULL},
+#'   only the feature count is added. NA values count as 0 (with a warning).
+#' @param method \code{"point_on_surface"} or \code{"area_weighted"}; only
+#'   affects polygon numerators.
+#' @param count_col Name of the output column counting features per
+#'   neighborhood (default \code{"n_features"}). With \code{"area_weighted"} it
+#'   counts the features overlapping each neighborhood. Use \code{NULL} to skip.
+#' @param outside What to do when features fall outside every neighborhood:
+#'   \code{"warn"} (default), \code{"error"} or \code{"ignore"}. They are dropped
+#'   in every case.
+#' @param verbose Print a summary of the assignment (default \code{TRUE}).
+#'
+#' @return \code{neighborhoods} (same rows, same order) with the summed
+#'   \code{vars} and \code{count_col} added. The attribute
+#'   \code{"assignment_summary"} is a data frame with, for each variable, the
+#'   \code{total} in \code{numerator}, the amount \code{assigned} and the amount
+#'   that fell \code{outside}.
+#'
+#' @examples
+#' \donttest{
+#' if (requireNamespace("sf", quietly = TRUE)) {
+#'   sq <- function(x, y) sf::st_polygon(list(rbind(
+#'     c(x, y), c(x + 1, y), c(x + 1, y + 1), c(x, y + 1), c(x, y))))
+#'   tracts <- sf::st_sf(id = 1:3,
+#'                       geometry = sf::st_sfc(sq(0, 0), sq(1, 0), sq(2, 0)),
+#'                       crs = 3857)
+#'   projects <- sf::st_sf(units = c(10, 20, 5),
+#'                         geometry = sf::st_sfc(sf::st_point(c(0.5, 0.5)),
+#'                                               sf::st_point(c(0.2, 0.8)),
+#'                                               sf::st_point(c(1.5, 0.5))),
+#'                         crs = 3857)
+#'   # Tract 3 has no projects and is kept with 0 units
+#'   assign_to_neighborhoods(projects, tracts, vars = "units")
+#' }
+#' }
+#'
+#' @export
+assign_to_neighborhoods <- function(numerator,
+                                    neighborhoods,
+                                    vars = NULL,
+                                    method = c("point_on_surface", "area_weighted"),
+                                    count_col = "n_features",
+                                    outside = c("warn", "error", "ignore"),
+                                    verbose = TRUE) {
+
+  check_sf()
+  method <- match.arg(method)
+  outside <- match.arg(outside)
+  check_polygon_layer(neighborhoods, "neighborhoods")
+  kind <- check_numerator_layer(numerator, vars)
+
+  out_names <- if (is.null(vars)) character(0) else names(vars)
+  if (length(vars) > 0 && is.null(out_names)) out_names <- rep("", length(vars))
+  out_names[out_names == ""] <- vars[out_names == ""]
+  vars <- unname(vars)
+
+  new_cols <- c(out_names, count_col)
+  if (anyDuplicated(new_cols)) {
+    stop("Output column names must be unique: ", paste(new_cols, collapse = ", "))
+  }
+  clash <- intersect(new_cols, names(neighborhoods))
+  if (length(clash) > 0) {
+    stop(sprintf(
+      "neighborhoods already has column(s) %s. Name the output differently, e.g. vars = c(%s_new = \"%s\").",
+      paste0("'", clash, "'", collapse = ", "), clash[1], clash[1]
+    ))
+  }
+
+  if (sf::st_crs(numerator) != sf::st_crs(neighborhoods)) {
+    message("Transforming numerator to match neighborhoods CRS")
+    numerator <- sf::st_transform(numerator, sf::st_crs(neighborhoods))
+  }
+
+  # Drop empty geometries
+  empty <- sf::st_is_empty(numerator)
+  if (any(empty)) {
+    warning(sprintf("%s numerator feature(s) have empty geometry and were dropped.",
+                    format_count(sum(empty))), call. = FALSE)
+    numerator <- numerator[!empty, ]
+  }
+
+  # Values to sum (n features x k vars), NA counted as 0
+  values <- vapply(vars, function(v) as.numeric(numerator[[v]]),
+                   numeric(nrow(numerator)))
+  values <- matrix(values, nrow = nrow(numerator), ncol = length(vars))
+  colnames(values) <- out_names
+  if (anyNA(values)) {
+    na_counts <- colSums(is.na(values))
+    warning(sprintf(
+      "NA values in numerator counted as 0: %s",
+      paste(sprintf("%s (%s)", vars[na_counts > 0], format_count(na_counts[na_counts > 0])),
+            collapse = ", ")
+    ), call. = FALSE)
+    values[is.na(values)] <- 0
+  }
+
+  n_nb <- nrow(neighborhoods)
+  nb_geom <- sf::st_geometry(neighborhoods)
+
+  if (kind == "polygon" && method == "area_weighted") {
+    weights <- area_weights(sf::st_geometry(numerator), nb_geom)
+    # weights: data frame of feature, neighborhood, share
+    sums <- matrix(0, nrow = n_nb, ncol = ncol(values), dimnames = list(NULL, out_names))
+    if (nrow(weights) > 0 && ncol(values) > 0) {
+      contrib <- values[weights$feature, , drop = FALSE] * weights$share
+      agg <- rowsum(contrib, weights$neighborhood)
+      sums[as.integer(rownames(agg)), ] <- agg
+    }
+    counts <- tabulate(unique(weights[c("feature", "neighborhood")])$neighborhood,
+                       nbins = n_nb)
+    assigned_share <- tabulate_weights(weights, nrow(numerator))
+    n_outside <- sum(assigned_share < 1e-9)
+  } else {
+    pts <- representative_points(numerator, kind)
+    hits <- sf::st_intersects(pts, nb_geom)
+    # First match only, so points on shared edges count once
+    nb_idx <- vapply(hits, function(h) if (length(h) > 0) h[1] else NA_integer_,
+                     integer(1))
+    ok <- !is.na(nb_idx)
+
+    sums <- matrix(0, nrow = n_nb, ncol = ncol(values), dimnames = list(NULL, out_names))
+    if (any(ok) && ncol(values) > 0) {
+      agg <- rowsum(values[ok, , drop = FALSE], nb_idx[ok])
+      sums[as.integer(rownames(agg)), ] <- agg
+    }
+    counts <- tabulate(nb_idx[ok], nbins = n_nb)
+    assigned_share <- as.numeric(ok)
+    n_outside <- sum(!ok)
+  }
+
+  # Conservation check
+  totals <- colSums(values)
+  assigned <- colSums(sums)
+  summary_df <- data.frame(
+    variable = out_names,
+    total = unname(totals),
+    assigned = unname(assigned),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(count_col)) {
+    summary_df <- rbind(summary_df, data.frame(
+      variable = count_col, total = nrow(numerator), assigned = sum(assigned_share),
+      stringsAsFactors = FALSE
+    ))
+  }
+  summary_df$outside <- summary_df$total - summary_df$assigned
+  rownames(summary_df) <- NULL
+
+  if (verbose) {
+    message(sprintf(
+      "Assigned %s of %s numerator features (%s method) to %s of %s neighborhoods%s",
+      format_count(round(sum(assigned_share), 2)), format_count(nrow(numerator)),
+      if (kind == "point") "point" else method,
+      format_count(sum(counts > 0)), format_count(n_nb),
+      if (length(out_names) > 0) {
+        paste0("; ", paste(sprintf("%s: %s of %s", out_names,
+                                   format_count(round(assigned, 2)),
+                                   format_count(round(totals, 2))),
+                           collapse = ", "))
+      } else ""
+    ))
+  }
+
+  lost <- n_outside > 0 || any(abs(totals - assigned) > 1e-6 * pmax(abs(totals), 1))
+  if (lost) {
+    msg <- sprintf(
+      "%s numerator feature(s)%s fell outside every neighborhood and were dropped%s. Check the CRS and coverage of both layers.",
+      format_count(n_outside),
+      if (kind == "polygon" && method == "area_weighted") " (or parts of features)" else "",
+      if (length(out_names) > 0) {
+        paste0(" (", paste(sprintf("%s: %s", out_names, format_count(round(totals - assigned, 2))),
+                           collapse = ", "), ")")
+      } else ""
+    )
+    switch(outside,
+      warn = warning(msg, call. = FALSE),
+      error = stop(msg, call. = FALSE),
+      ignore = if (verbose) message(msg)
+    )
+  }
+
+  # Neighborhoods are the destination: add the sums to every row
+  for (nm in out_names) neighborhoods[[nm]] <- sums[, nm]
+  if (!is.null(count_col)) neighborhoods[[count_col]] <- counts
+  neighborhoods <- geometry_last(neighborhoods)
+
+  attr(neighborhoods, "assignment_summary") <- summary_df
+  neighborhoods
+}
+
+#' Aggregate spatial units to neighborhoods
+#'
+#' Sums a unit variable from point (or polygon) features into neighborhoods.
+#' This is a wrapper around \code{\link{assign_to_neighborhoods}()} kept for
+#' backward compatibility; new code should use that function or the
+#' \code{numerator} argument of \code{\link{prepare_spatial_fhlus}()}.
+#'
+#' @param units_data SF object with unit-level data (e.g., individual buildings)
+#' @param neighborhoods SF object with neighborhood boundaries
+#' @param unit_var Column name for units variable to aggregate
+#' @param neighborhood_id Column name for neighborhood identifier
+#' @param method How polygon features are assigned; see
+#'   \code{\link{assign_to_neighborhoods}()}.
+#'
+#' @return SF object (neighborhoods) with aggregated units (\code{total_units})
+#'   and site counts (\code{n_sites}); neighborhoods without units get 0.
+#'
+#' @examples
+#' \donttest{
+#' # Requires sf package
+#' if (requireNamespace("sf", quietly = TRUE)) {
+#'   # This example would require actual spatial data
+#'   # See ?assign_to_neighborhoods for a complete example
+#' }
+#' }
+#'
+#' @export
+aggregate_to_neighborhoods <- function(units_data,
+                                       neighborhoods,
+                                       unit_var,
+                                       neighborhood_id,
+                                       method = c("point_on_surface", "area_weighted")) {
+
+  check_sf()
+
+  # Ensure both are sf objects
+  if (!inherits(units_data, "sf") || !inherits(neighborhoods, "sf")) {
+    stop("Both units_data and neighborhoods must be sf objects.")
+  }
+  if (!neighborhood_id %in% names(neighborhoods)) {
+    stop(sprintf("neighborhood_id '%s' not found in neighborhoods.", neighborhood_id))
+  }
+
+  assign_to_neighborhoods(
+    units_data, neighborhoods,
+    vars = c(total_units = unit_var),
+    method = match.arg(method),
+    count_col = "n_sites"
+  )
 }
 
 #' Calculate areas excluding specific zones (attribute-based)
@@ -235,67 +754,273 @@ calculate_excluded_areas_spatial <- function(spatial_data, exclude_layer) {
   return(spatial_data)
 }
 
-#' Aggregate spatial units to neighborhoods
-#'
-#' @param units_data SF object with unit-level data (e.g., individual buildings)
-#' @param neighborhoods SF object with neighborhood boundaries
-#' @param unit_var Column name for units variable to aggregate
-#' @param neighborhood_id Column name for neighborhood identifier
-#'
-#' @return SF object (neighborhoods) with aggregated units and site counts
-#'
-#' @examples
-#' \donttest{
-#' # Requires sf package
-#' if (requireNamespace("sf", quietly = TRUE)) {
-#'   # This example would require actual spatial data
-#'   # See package vignettes for complete examples
-#' }
-#' }
-#'
-#' @export
-aggregate_to_neighborhoods <- function(units_data,
-                                       neighborhoods,
-                                       unit_var,
-                                       neighborhood_id) {
+# ---- Internal spatial helpers ----------------------------------------------
 
+#' Stop if sf is not installed
+#' @noRd
+check_sf <- function() {
   if (!requireNamespace("sf", quietly = TRUE)) {
     stop("Package 'sf' required for spatial operations. Install with install.packages('sf').")
   }
+}
 
-  # Ensure both are sf objects
-  if (!inherits(units_data, "sf") || !inherits(neighborhoods, "sf")) {
-    stop("Both units_data and neighborhoods must be sf objects.")
+#' Check that an argument is an sf layer of polygons
+#' @noRd
+check_polygon_layer <- function(x, arg) {
+  if (!inherits(x, "sf")) {
+    stop(sprintf(
+      "%s must be an sf object. Got class: %s.",
+      arg, paste(class(x), collapse = ", ")
+    ))
+  }
+  geom_types <- unique(as.character(sf::st_geometry_type(x)))
+  valid_types <- c("POLYGON", "MULTIPOLYGON")
+  if (!all(geom_types %in% valid_types)) {
+    stop(sprintf(
+      "%s must contain polygon geometries (POLYGON or MULTIPOLYGON). Got: %s.",
+      arg, paste(geom_types, collapse = ", ")
+    ))
+  }
+  invisible(TRUE)
+}
+
+#' Check a numerator layer; returns "point" or "polygon"
+#' @noRd
+check_numerator_layer <- function(numerator, vars) {
+  if (!inherits(numerator, "sf")) {
+    stop(sprintf(
+      "numerator must be an sf object. Got class: %s. Use sf::st_as_sf() to convert (e.g., sf::st_as_sf(df, coords = c(\"lon\", \"lat\"), crs = 4326)).",
+      paste(class(numerator), collapse = ", ")
+    ))
+  }
+  geom_types <- unique(as.character(sf::st_geometry_type(numerator)))
+  geom_types <- setdiff(geom_types, "GEOMETRYCOLLECTION")
+  is_point <- all(geom_types %in% c("POINT", "MULTIPOINT"))
+  is_polygon <- all(geom_types %in% c("POLYGON", "MULTIPOLYGON"))
+  if (length(geom_types) == 0 || !(is_point || is_polygon)) {
+    stop(sprintf(
+      "numerator must contain only points (POINT/MULTIPOINT) or only polygons (POLYGON/MULTIPOLYGON). Got: %s.",
+      paste(unique(as.character(sf::st_geometry_type(numerator))), collapse = ", ")
+    ))
   }
 
-  # Ensure same CRS
-  if (sf::st_crs(units_data) != sf::st_crs(neighborhoods)) {
-    message("Transforming units_data to match neighborhoods CRS")
-    units_data <- sf::st_transform(units_data, sf::st_crs(neighborhoods))
+  vars <- unname(vars)
+  missing_vars <- setdiff(vars, names(numerator))
+  if (length(missing_vars) > 0) {
+    stop(sprintf(
+      "numerator_vars not found in numerator: %s. Available columns: %s",
+      paste(missing_vars, collapse = ", "),
+      paste(setdiff(names(numerator), attr(numerator, "sf_column")), collapse = ", ")
+    ))
+  }
+  not_numeric <- vars[!vapply(vars, function(v) is.numeric(numerator[[v]]), logical(1))]
+  if (length(not_numeric) > 0) {
+    stop(sprintf("numerator_vars must be numeric: %s", paste(not_numeric, collapse = ", ")))
   }
 
-  # Perform spatial join
-  joined <- sf::st_join(units_data, neighborhoods[neighborhood_id])
+  if (is_point) "point" else "polygon"
+}
 
-  # Aggregate by neighborhood
-  aggregated <- joined %>%
-    sf::st_drop_geometry() %>%
-    dplyr::group_by(!!rlang::sym(neighborhood_id)) %>%
-    dplyr::summarise(
-      total_units = sum(!!rlang::sym(unit_var), na.rm = TRUE),
-      n_sites = dplyr::n(),
-      .groups = "drop"
-    )
+#' One point per feature used for point-in-neighborhood assignment
+#' @noRd
+representative_points <- function(x, kind) {
+  geom <- sf::st_geometry(x)
+  if (kind == "point") {
+    # MULTIPOINTs are placed at their first point
+    if (any(sf::st_geometry_type(geom) == "MULTIPOINT")) {
+      geom <- sf::st_sfc(lapply(geom, function(g) {
+        if (inherits(g, "MULTIPOINT")) sf::st_point(unclass(g)[1, ]) else g
+      }), crs = sf::st_crs(geom))
+    }
+    return(geom)
+  }
+  suppressWarnings(sf::st_point_on_surface(sf::st_make_valid(geom)))
+}
 
-  # Join back to neighborhoods to get all neighborhoods (even those with 0 units)
-  result <- neighborhoods %>%
-    dplyr::left_join(aggregated, by = neighborhood_id) %>%
-    dplyr::mutate(
-      total_units = tidyr::replace_na(total_units, 0),
-      n_sites = tidyr::replace_na(n_sites, 0)
-    )
+#' Area-weighted overlap shares between features and neighborhoods
+#' @return data frame: feature, neighborhood, share (of the feature's area)
+#' @noRd
+area_weights <- function(features, nb_geom) {
+  features <- sf::st_make_valid(features)
+  nb_geom <- sf::st_make_valid(nb_geom)
+  feat_area <- as.numeric(sf::st_area(features))
 
-  return(result)
+  # sf-on-sf intersection uses a spatial index and returns one row per
+  # overlapping (feature, neighborhood) pair
+  overlap <- suppressWarnings(sf::st_intersection(
+    sf::st_sf(feature = seq_along(features), geometry = features),
+    sf::st_sf(neighborhood = seq_along(nb_geom), geometry = nb_geom)
+  ))
+  if (nrow(overlap) == 0) {
+    return(data.frame(feature = integer(0), neighborhood = integer(0), share = numeric(0)))
+  }
+
+  pairs <- data.frame(feature = overlap$feature, neighborhood = overlap$neighborhood)
+  pairs$share <- ifelse(feat_area[pairs$feature] > 0,
+                        as.numeric(sf::st_area(overlap)) / feat_area[pairs$feature], 0)
+  pairs[pairs$share > 0, ]
+}
+
+#' Total assigned share per feature (area-weighted)
+#' @noRd
+tabulate_weights <- function(weights, n) {
+  out <- numeric(n)
+  if (nrow(weights) > 0) {
+    s <- rowsum(weights$share, weights$feature)
+    out[as.integer(rownames(s))] <- pmin(s[, 1], 1)
+  }
+  out
+}
+
+#' Dissolve a boundary layer, optionally by an ID column
+#' @noRd
+dissolve_boundary <- function(boundary, boundary_id = NULL) {
+  geom <- sf::st_geometry(boundary)
+  if (is.null(boundary_id)) {
+    return(sf::st_sf(.__fhlus_bnd = 1L, geometry = sf::st_union(geom)))
+  }
+  ids <- boundary[[boundary_id]]
+  keep <- !is.na(ids)
+  if (any(!keep)) {
+    warning(sprintf("%d boundary feature(s) have NA %s and were ignored.",
+                    sum(!keep), boundary_id), call. = FALSE)
+  }
+  groups <- unique(ids[keep])
+  merged <- lapply(groups, function(g) sf::st_union(geom[keep & ids == g])[[1]])
+  out <- sf::st_sf(id = groups, geometry = sf::st_sfc(merged, crs = sf::st_crs(boundary)))
+  names(out)[1] <- boundary_id
+  out
+}
+
+#' Keep polygon parts of an intersection and merge pieces sharing a key
+#' @noRd
+keep_polygon_pieces <- function(pieces, key_cols) {
+  if (nrow(pieces) == 0) return(pieces)
+
+  types <- as.character(sf::st_geometry_type(pieces))
+  if (any(types == "GEOMETRYCOLLECTION")) {
+    gc <- types == "GEOMETRYCOLLECTION"
+    extracted <- sf::st_collection_extract(pieces[gc, ], "POLYGON", warn = FALSE)
+    pieces <- rbind(pieces[!gc, ], extracted)
+    types <- as.character(sf::st_geometry_type(pieces))
+  }
+  # Edges and corners touching the boundary produce lines/points; drop them
+  pieces <- pieces[types %in% c("POLYGON", "MULTIPOLYGON"), ]
+
+  key <- do.call(paste, c(lapply(key_cols, function(k) pieces[[k]]), sep = "\r"))
+  if (anyDuplicated(key)) {
+    geoms <- sf::st_geometry(pieces)
+    groups <- split(seq_along(key), factor(key, levels = unique(key)))
+    merged <- lapply(groups, function(i) {
+      if (length(i) == 1) geoms[[i]] else sf::st_union(geoms[i])[[1]]
+    })
+    pieces <- pieces[!duplicated(key), ]
+    sf::st_geometry(pieces) <- sf::st_sfc(merged, crs = sf::st_crs(geoms))
+  }
+  pieces
+}
+
+#' Drop numerator features outside the boundary (reported, not warned)
+#' @noRd
+drop_outside_boundary <- function(numerator, boundary, crs, method) {
+  if (sf::st_crs(numerator) != crs) numerator <- sf::st_transform(numerator, crs)
+  if (sf::st_crs(boundary) != crs) boundary <- sf::st_transform(boundary, crs)
+
+  kind <- check_numerator_layer(numerator, NULL)
+  test_geom <- if (kind == "polygon" && method == "area_weighted") {
+    sf::st_geometry(numerator)
+  } else {
+    representative_points(numerator, kind)
+  }
+  area <- sf::st_union(sf::st_make_valid(sf::st_geometry(boundary)))
+  inside <- lengths(sf::st_intersects(test_geom, area)) > 0
+
+  if (any(!inside)) {
+    message(sprintf("%s of %s numerator features are outside the boundary and were dropped",
+                    format_count(sum(!inside)), format_count(length(inside))))
+  }
+  numerator[inside, ]
+}
+
+#' Number of vertices in a layer (for workload estimates)
+#' @noRd
+count_vertices <- function(x) {
+  if (is.null(x)) return(0)
+  nrow(sf::st_coordinates(sf::st_geometry(x)))
+}
+
+#' Warn when the spatial steps are likely to be slow
+#' @noRd
+warn_spatial_workload <- function(spatial_data, area_crs, boundary, exclude_layer,
+                                  numerator, numerator_method) {
+  reasons <- character(0)
+
+  if (is.null(area_crs) && isTRUE(sf::st_is_longlat(spatial_data)) &&
+      (!is.null(boundary) || !is.null(exclude_layer) || !is.null(numerator))) {
+    reasons <- c(reasons, "data are in lat/lon, so intersections use slower spherical geometry (set area_crs to a projected CRS)")
+  }
+
+  heavy_vertices <- count_vertices(boundary) + count_vertices(exclude_layer)
+  if (heavy_vertices > 500000) {
+    reasons <- c(reasons, sprintf(
+      "the boundary/exclusion layers have %s vertices (consider sf::st_simplify() or rmapshaper::ms_simplify())",
+      format_count(heavy_vertices)))
+  }
+
+  nb_vertices <- count_vertices(spatial_data)
+  if (nb_vertices > 2000000) {
+    reasons <- c(reasons, sprintf("the neighborhoods have %s vertices", format_count(nb_vertices)))
+  }
+
+  if (!is.null(numerator)) {
+    poly <- any(as.character(sf::st_geometry_type(numerator)) %in% c("POLYGON", "MULTIPOLYGON"))
+    limit <- if (poly && numerator_method == "area_weighted") 50000 else 500000
+    if (nrow(numerator) > limit) {
+      reasons <- c(reasons, sprintf(
+        "the numerator has %s %s features%s", format_count(nrow(numerator)),
+        if (poly) "polygon" else "point",
+        if (poly && numerator_method == "area_weighted") " with area weighting" else ""))
+    }
+  }
+
+  if (length(reasons) > 0) {
+    warning(paste0(
+      "The spatial steps may take a while: ", paste(reasons, collapse = "; "), "."
+    ), call. = FALSE)
+  }
+  invisible(reasons)
+}
+
+#' Step-by-step progress messages with elapsed time
+#' @noRd
+spatial_progress <- function(n_steps, verbose) {
+  i <- 0L
+  start <- Sys.time()
+  elapsed <- function() {
+    sprintf("%.1fs", as.numeric(difftime(Sys.time(), start, units = "secs")))
+  }
+  list(
+    step = function(text) {
+      i <<- i + 1L
+      if (verbose) message(sprintf("[%d/%d] %s... (%s)", i, n_steps, text, elapsed()))
+    },
+    done = function() {
+      if (verbose) message(sprintf("Spatial preparation finished in %s", elapsed()))
+    }
+  )
+}
+
+#' Move the geometry column to the end
+#' @noRd
+geometry_last <- function(x) {
+  geom_col <- attr(x, "sf_column")
+  x[, c(setdiff(names(x), geom_col), geom_col)]
+}
+
+#' Format a count with thousands separators
+#' @noRd
+format_count <- function(x) {
+  format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
 }
 
 #' Impute missing values using spatial neighbors
