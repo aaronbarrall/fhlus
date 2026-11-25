@@ -42,6 +42,14 @@ Interactive plots (require plotly and htmlwidgets):
 \item \code{\link{fhlus_save_html}}: Save an interactive plot as standalone HTML
 \item \code{\link{fhlus_segments}}: Per-geography segment data
 }
+
+Linked plot and map (require plotly, htmlwidgets, sf and jsonlite):
+\itemize{
+\item \code{\link{fhlus_linked}}: Interactive plot linked to a map of the
+same geographies (hover either to highlight both, click to pin)
+\item \code{\link{fhlus_linkedOutput}}, \code{\link{renderFhlus_linked}}:
+Shiny bindings (also require shiny)
+}
 }
 
 \section{FHLUS Score Interpretation}{
@@ -105,7 +113,7 @@ result$confidence_interval
 
 \section{References}{
 
-For a walkthrough of the interactive plots and HTML export, see
+For a walkthrough of the interactive plots, the linked map and HTML export, see
 \code{vignette("interactive-plots", package = "fhlus")}.
 }
 
@@ -123,6 +131,11 @@ Useful links:
 Authors:
 \itemize{
   \item Aaron Barrall \email{aaronbarrall@ucla.edu}
+}
+
+Other contributors:
+\itemize{
+  \item MapLibre contributors (MapLibre GL JS library; see inst/COPYRIGHTS) [contributor, copyright holder]
 }
 
 }

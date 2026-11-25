@@ -1,0 +1,7 @@
+The fhlus package bundles the following third-party software:
+
+MapLibre GL JS 5.24.1
+  Files:     inst/htmlwidgets/lib/maplibre-gl-5.24.1/
+  Copyright: (c) 2023, MapLibre contributors; (c) 2020, Mapbox
+  License:   BSD-3-Clause (full text in inst/htmlwidgets/lib/maplibre-gl-5.24.1/LICENSE.txt)
+  Source:    https://github.com/maplibre/maplibre-gl-js

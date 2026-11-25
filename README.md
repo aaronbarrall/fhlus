@@ -50,7 +50,7 @@ result$scores
 
 ## Function Reference
 
-Every function the package exports, grouped by task. Run `?function_name` for full documentation.
+Every function the package exports, grouped by task. The tables below list only the key arguments; see [Argument Reference](#argument-reference) for every argument of every function, or run `?function_name`.
 
 ### Calculating scores
 
@@ -85,8 +85,15 @@ Every function the package exports, grouped by task. Run `?function_name` for fu
 |---|---|---|
 | `fhlus_interactive()` | Interactive version of the FHLUS plot. Hovering shows each geography's ID, rank, values, shares, concentration and any extra variables. | `result`, `id`, `tooltip_vars`, `show_ci_bands` |
 | `fhlus_compare_interactive()` | Interactive version of `fhlus_compare()`, with one combined pop-up per geography. | `result_a`, `result_b`, `label_a`, `label_b`, `id`, `tooltip_vars`, `show_ci` |
-| `fhlus_save_html()` | Saves an interactive plot (or a result directly) as a standalone HTML file. | `x`, `file`, `selfcontained` |
+| `fhlus_save_html()` | Saves an interactive plot, a linked map (or a result directly) as a standalone HTML file. | `x`, `file`, `selfcontained` |
 | `fhlus_segments()` | The per-geography table behind the interactive plots, for your own analysis or joining to maps. | `result`, `id`, `tooltip_vars` |
+
+### Linked plot and map (require `plotly`, `htmlwidgets`, `sf` and `jsonlite`)
+
+| Function | What it does | Key arguments |
+|---|---|---|
+| `fhlus_linked()` | The interactive plot next to a map of the same geographies, linked both ways: hover a segment to outline its neighborhood, hover a neighborhood to highlight its segment, click to pin. Map colors (rank, numerator, outlines) and basemaps (light, streets, aerial) switch in the page. | `result`, `geometry`, `id`, `tooltip_vars`, `fill_by`, `basemap` |
+| `fhlus_linkedOutput()` / `renderFhlus_linked()` | Shiny output and render functions for `fhlus_linked()` (also need `shiny`). The hovered and pinned IDs arrive as `input$<id>_hover` and `input$<id>_selected`. | `outputId` |
 
 ### Exporting
 
@@ -98,6 +105,263 @@ Every function the package exports, grouped by task. Run `?function_name` for fu
 ### Print methods
 
 `print()` has methods for `fhlus` (score summary and plot), `grouped_fhlus` (summary statistics and top/bottom groups), `fhlus_compare` (both scores and the plot) and `fhlus_segments` (one-line summary and the table).
+
+## Argument Reference
+
+Every argument of every exported function. "required" means there is no default. Where an argument takes one of several fixed values, the first value listed is the default.
+
+### `fhlus_score()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `df` | required | Data frame with one row per geography. |
+| `numerator` | required | Column with the variable being distributed (e.g., housing units). |
+| `rank_var` | required | Column (or vector of columns, applied in order) used to rank geographies. Higher values = higher opportunity. |
+| `denom` | required | Column with the denominator, usually land area (e.g., `available_area`). Rows with a zero denominator are dropped. |
+| `missing` | `NULL` | Margin of error in absolute numerator units. Adds lowest/highest scores by giving those units to the lowest- or highest-ranked areas. |
+| `missing_pct` | `NULL` | Margin of error as a share of the numerator total (0-1). Overrides `missing` if both are given. |
+| `graph` | `TRUE` | Draw the cumulative distribution plot. |
+| `exclude_area` | `NULL` | Column with area to subtract from the denominator (e.g., `excluded_area` from `prepare_spatial_fhlus()`). |
+| `tie_breaker` | `NULL` | Column(s) used to order geographies with tied `rank_var` values. |
+| `boundary_label` | `"Tract Boundary"` | Legend label for the boundary points on the plot; `NULL` hides them. |
+| `plot_subtitle` | `NULL` | Custom plot subtitle (`grouped_fhlus()` uses it for the group name). |
+| `show_ci_bands` | `FALSE` | Draw the confidence interval as a ribbon (needs `missing` or `missing_pct`). |
+| `ci_alpha` | `0.15` | Ribbon transparency (0-1). |
+| `annotation` | `TRUE` | Score label on the plot: `TRUE` shows "FHLUS = X", `FALSE`/`NULL` hides it, a string is shown as-is. |
+| `annotation_x` | `0.125` | Horizontal position of the score label (0-1). |
+| `annotation_y` | `0.93` | Vertical position of the score label (0-1). |
+| `verbose` | `TRUE` | Print warnings and messages (e.g., about dropped rows). |
+
+### `grouped_fhlus()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `df` | required | Data frame with all groups stacked (one row per geography per group). |
+| `group_var` | required | Column naming each group (e.g., `"city_name"`, or the `boundary_id` from `prepare_spatial_fhlus()`). |
+| `numerator` | required | As in `fhlus_score()`. |
+| `rank_var` | required | As in `fhlus_score()`. |
+| `denom` | required | As in `fhlus_score()`. |
+| `missing` | `NULL` | A number applied to every group, or the name of a column holding each group's margin of error in units. |
+| `missing_pct` | `NULL` | A share (0-1) applied to every group, or the name of a column holding each group's margin of error as a share. |
+| `exclude_area` | `NULL` | As in `fhlus_score()`. |
+| `tie_breaker` | `NULL` | As in `fhlus_score()`. |
+| `graph` | `FALSE` | Draw a plot per group. Plots are also stored in `attr(result, "plots")`. |
+| `graph_subset` | `NULL` | Group values to plot; `NULL` plots all (when `graph = TRUE`). |
+| `verbose` | `TRUE` | Print progress messages. |
+| `parallel` | `FALSE` | Process groups in parallel (needs `furrr`; worthwhile for about 20+ groups). |
+
+### `calculate_multiple_indices()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `data` | required | Data frame with all the variables. |
+| `indices` | required | Named list, one element per index. Each element is a list with `numerator`, `rank_var`, `denom`, and optionally `missing`, `missing_pct`, `exclude_area`, `tie_breaker`, and `ascending` (`FALSE` when lower values mean higher opportunity, e.g., poverty rate). |
+| `group_var` | `NULL` | Optional group column; if given, each index is run with `grouped_fhlus()`. |
+
+### `prepare_spatial_fhlus()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `spatial_data` | required | sf polygons (e.g., tracts) with their attributes (rank variables etc.). |
+| `area_crs` | `NULL` | Projected CRS to transform to before measuring area (e.g., a State Plane or UTM EPSG code). `NULL` keeps the current CRS and warns if it is lat/lon. |
+| `exclude_zones` | `NULL` | Values of `zone_column` whose whole features are excluded from the area (e.g., `"Open space"`). |
+| `zone_column` | `NULL` | Column holding the zone values for `exclude_zones`. |
+| `exclude_layer` | `NULL` | sf polygons to subtract from the area (e.g., parks). Dissolved and intersected with each feature; adds to any zone exclusion. |
+| `boundary` | `NULL` | sf polygons to clip the neighborhoods to (e.g., a city). Without `boundary_id`, all features are merged into one area. |
+| `boundary_id` | `NULL` | Column in `boundary` naming each jurisdiction. Clips each separately and stacks the result with this column added; use it as `group_var` in `grouped_fhlus()`. |
+| `min_share` | `0.01` | Clipped pieces smaller than this share of their original neighborhood are dropped as slivers. `0` keeps all. |
+| `numerator` | `NULL` | sf points or polygons (e.g., housing sites) to sum into the neighborhoods. |
+| `numerator_vars` | `NULL` | Columns of `numerator` to sum. Named vector renames them (e.g., `c(units = "net_units")`). `NULL` adds only the feature count. |
+| `numerator_method` | `"point_on_surface"` | How polygon numerators are assigned: `"point_on_surface"` (each polygon goes to one neighborhood) or `"area_weighted"` (split by overlap area). |
+| `count_col` | `"n_features"` | Name of the output column counting numerator features per neighborhood. |
+| `outside` | `"warn"` | What to do when numerator features inside the boundary fall outside every neighborhood: `"warn"`, `"error"` or `"ignore"`. |
+| `verbose` | `TRUE` | Print numbered progress messages. |
+
+### `clip_to_boundary()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `neighborhoods` | required | sf polygons (e.g., tracts). |
+| `boundary` | required | sf polygons to clip to. Without `boundary_id`, merged into one area. |
+| `boundary_id` | `NULL` | Column in `boundary` naming each jurisdiction; clips each separately and stacks the pieces with this column added. |
+| `min_share` | `0.01` | Pieces smaller than this share of their original neighborhood are dropped. `0` keeps all. |
+| `verbose` | `TRUE` | Print a summary of what was clipped. |
+
+### `assign_to_neighborhoods()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `numerator` | required | sf points or polygons to sum. |
+| `neighborhoods` | required | sf polygons to sum into (all rows are kept, in order, with 0 where nothing falls). |
+| `vars` | `NULL` | Numeric columns of `numerator` to sum. Named vector renames them. `NULL` adds only the count. NAs count as 0 (with a warning). |
+| `method` | `"point_on_surface"` | For polygon numerators: `"point_on_surface"` or `"area_weighted"`. Ignored for points. |
+| `count_col` | `"n_features"` | Name of the output count column; `NULL` skips it. |
+| `outside` | `"warn"` | What to do when features fall outside every neighborhood: `"warn"`, `"error"` or `"ignore"`. They are dropped either way. |
+| `verbose` | `TRUE` | Print an assignment summary. |
+
+### `aggregate_to_neighborhoods()`
+
+Older wrapper around `assign_to_neighborhoods()`.
+
+| Argument | Default | Description |
+|---|---|---|
+| `units_data` | required | sf points or polygons with unit counts (e.g., buildings). |
+| `neighborhoods` | required | sf neighborhood polygons. |
+| `unit_var` | required | Column of `units_data` to sum; output column is `total_units` (count column is `n_sites`). |
+| `neighborhood_id` | required | ID column in `neighborhoods`. Only checked to exist; the output keeps the neighborhoods' rows and order. |
+| `method` | `"point_on_surface"` | As in `assign_to_neighborhoods()`. |
+
+### `spatial_impute()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `spatial_data` | required | sf object with the variable to fill (needs `spdep`). |
+| `impute_var` | required | Column with missing values to fill. |
+| `method` | `"mean"` | `"mean"`, `"median"` or `"idw"` (inverse distance weighted) of the neighbors' values. |
+| `k` | `5` | Number of nearest neighbors used. |
+
+### `validate_fhlus_data()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `data` | required | Data frame to check. |
+| `numerator` | required | Numerator column. |
+| `rank_var` | required | Ranking column(s). |
+| `denom` | required | Denominator column. |
+| `verbose` | `TRUE` | Print detailed messages. |
+
+### `fhlus_compare()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `result_a`, `result_b` | required | Two `fhlus_score()` results. |
+| `label_a` | `"Policy A"` | Label for the first result. |
+| `label_b` | `"Policy B"` | Label for the second result. |
+| `title` | `"FHLUS Policy Comparison"` | Plot title. |
+| `subtitle` | `NULL` | Plot subtitle; `NULL` generates one. |
+| `color_a` | `"#E41A1C"` | Color of the first curve. |
+| `color_b` | `"#377EB8"` | Color of the second curve. |
+| `show_reference` | `TRUE` | Draw the dashed proportional (diagonal) line. |
+| `show_ci` | `FALSE` | Draw CI ribbons (results need `missing`/`missing_pct`; otherwise skipped with a warning). |
+| `ci_alpha` | `0.15` | Ribbon transparency (0-1). |
+| `rank_var` | `NULL` | Name shown in the "Lower/Higher ..." axis labels; `NULL` omits them. |
+
+### `analyze_grouped_fhlus()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `grouped_results` | required | Output of `grouped_fhlus()`. |
+| `group_characteristics` | `NULL` | Data frame of group attributes (e.g., population) to correlate with scores. |
+| `join_by` | `NULL` | Column used to join `group_characteristics` to the results. |
+
+### `plot_grouped_fhlus()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `grouped_results` | required | Output of `grouped_fhlus()`. |
+| `score_col` | `"score"` | Column to plot: `"score"`, `"score_lowest"` or `"score_highest"`. |
+| `n_groups` | `10` | Number of top and bottom groups to highlight. |
+| `highlight_groups` | `NULL` | Specific group names to highlight (overrides `n_groups`). |
+
+### `fhlus_interactive()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `result` | required | A `fhlus_score()` result. |
+| `id` | `NULL` | Geography ID column. `NULL` looks for `GEOID`, `geoid`, `GEOID20`, `GEOID10`, then falls back to rank. |
+| `tooltip_vars` | `NULL` | Extra columns to show on hover (any column in the data). Name them to set labels, e.g., `c("Median rent" = "rent")`. |
+| `title` | `"Fair Housing Land Use Score"` | Plot title. |
+| `subtitle` | `NULL` | Plot subtitle; `NULL` uses "Distribution of <numerator>". |
+| `show_ci_bands` | `FALSE` | Draw the CI ribbon (needs `missing`/`missing_pct`). |
+| `ci_alpha` | `0.15` | Ribbon transparency (0-1). |
+| `color_var` | `"red"` | Color of the cumulative numerator line. |
+| `color_denom` | `"blue"` | Color of the cumulative denominator line. |
+| `boundary_label` | `"Tract Boundary"` | Legend label for boundary points; `NULL` hides them. |
+| `annotation` | `TRUE` | Score label: `TRUE`, `FALSE`/`NULL`, or custom text. |
+| `annotation_x` | `0.125` | Horizontal position of the score label (0-1). |
+| `annotation_y` | `0.93` | Vertical position of the score label (0-1). |
+| `highlight` | `TRUE` | Highlight the hovered geography's segment. |
+| `width`, `height` | `NULL` | Widget size in pixels; `NULL` fills the container. |
+| `source` | `"fhlus"` | Plotly event source ID, for reading hover events in Shiny with `plotly::event_data(source = ...)`. |
+| `numerator`, `denom`, `rank_var` | `NULL` | Column names; only needed for results made before fhlus 0.3.0 (newer results store them in `result$meta`). |
+
+### `fhlus_compare_interactive()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `result_a`, `result_b` | required | Two `fhlus_score()` results. |
+| `label_a` | `"Policy A"` | Label for the first result. |
+| `label_b` | `"Policy B"` | Label for the second result. |
+| `id` | `NULL` | Geography ID column, as in `fhlus_interactive()`. Used to match geographies across the two results. |
+| `tooltip_vars` | `NULL` | Extra hover columns, as in `fhlus_interactive()`. |
+| `title` | `"FHLUS Policy Comparison"` | Plot title. |
+| `subtitle` | `NULL` | Plot subtitle; `NULL` uses "Cumulative distribution comparison". |
+| `color_a` | `"#E41A1C"` | Color of the first curve. |
+| `color_b` | `"#377EB8"` | Color of the second curve. |
+| `show_reference` | `TRUE` | Draw the dashed proportional line. |
+| `show_ci` | `FALSE` | Draw CI ribbons for results that have them. |
+| `ci_alpha` | `0.15` | Ribbon transparency (0-1). |
+| `rank_var` | `NULL` | Name for the "Lower/Higher ..." labels; `NULL` uses `result_a`'s rank variable, `FALSE` hides them. |
+| `highlight` | `TRUE` | Highlight the hovered segment. |
+| `width`, `height` | `NULL` | Widget size in pixels; `NULL` fills the container. |
+| `source` | `"fhlus"` | Plotly event source ID for Shiny. |
+
+### `fhlus_linked()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `result` | required | Result from `fhlus_score()`. If it was computed on sf data (e.g. from `prepare_spatial_fhlus()`), its geometry is used. |
+| `geometry` | `NULL` | sf polygons with the ID column, for results computed on plain data frames. Matched by ID; unmatched geographies are reported. |
+| `id` | `NULL` | ID column; auto-detects `GEOID`/`geoid`/`GEOID20`/`GEOID10`. |
+| `tooltip_vars` | `NULL` | Extra columns for the pop-ups (named = display labels). |
+| `fill_by` | `"rank"` | Initial map coloring: `"rank"`, `"numerator"` or `"none"` (outlines). Switchable in the page. |
+| `basemap` | `"light"` | Initial basemap: `"light"`, `"streets"`, `"aerial"` or `"none"`. Switchable in the page. Esri tiles, no API key. |
+| `fill_opacity` | `0.7` | Initial polygon fill opacity (0-1); there is also a slider in the page. |
+| `layout` | `"side"` | `"side"` (plot left, map right) or `"stacked"`. Narrow containers always stack. |
+| `simplify` | `NULL` | Simplification tolerance in meters. `NULL` simplifies only inputs over 100,000 vertices; `FALSE` never simplifies. |
+| `max_features` | `5000` | Stop with an error above this many geographies. |
+| `width`, `height` | `NULL` | Widget size; `NULL` fills the container. |
+| `elementId` | `NULL` | Optional element ID. |
+| `...` | | Passed to `fhlus_interactive()` for the plot panel (e.g. `title`, `show_ci_bands`, `color_var`). |
+
+### `fhlus_save_html()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `x` | required | A widget from `fhlus_interactive()`/`fhlus_compare_interactive()`/`fhlus_linked()`, or a `fhlus_score()` result. |
+| `file` | required | Path of the HTML file to write. |
+| `selfcontained` | `TRUE` | Embed everything in one file (needs pandoc; falls back to a folder with a warning if missing). |
+| `title` | `"Fair Housing Land Use Score"` | Browser tab title. |
+| `libdir` | `NULL` | Folder for dependencies when not self-contained; `NULL` uses `<file>_files`. |
+| `...` | | Passed to `fhlus_interactive()` when `x` is a result (e.g., `id`, `tooltip_vars`). |
+
+### `fhlus_segments()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `result` | required | A `fhlus_score()` result. |
+| `id` | `NULL` | Geography ID column, as in `fhlus_interactive()`. |
+| `tooltip_vars` | `NULL` | Extra columns to carry along. |
+| `numerator`, `denom`, `rank_var` | `NULL` | Only needed for results made before fhlus 0.3.0. |
+
+### `fhlus_to_list()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `result` | required | A `fhlus_score()` result. |
+| `id` | `NULL` | Geography ID column, as in `fhlus_interactive()`. |
+| `tooltip_vars` | `NULL` | Extra columns to include in the segments. |
+| `tooltips` | `TRUE` | Add a `tooltip` column with each segment's HTML hover text. |
+| `numerator`, `denom`, `rank_var` | `NULL` | Only needed for results made before fhlus 0.3.0. |
+
+### `export_fhlus()`
+
+| Argument | Default | Description |
+|---|---|---|
+| `results` | required | A `fhlus_score()` result, `grouped_fhlus()` result, or data frame. |
+| `filename` | required | Output path without extension. |
+| `format` | `"csv"` | `"csv"`, `"xlsx"` (needs `openxlsx`), `"rds"` or `"json"` (needs `jsonlite`). |
+| `include_plot` | `TRUE` | Also save the plot as a PNG, if the result has one. |
 
 ## Example: Grouped Analysis
 
@@ -298,6 +562,58 @@ fhlus_compare_interactive(
   or denominator, each curve gets its own hover target, and the pop-up is for
   whichever curve is nearest the cursor. A geography missing from one result is
   marked *Not in this result*.
+
+### Linked map
+
+`fhlus_linked()` puts the interactive curve next to a map of the same
+geographies and links them both ways. Hover a segment of the curve and its
+neighborhood is outlined on the map; hover a neighborhood and its segment is
+highlighted on the curve, with the same pop-up. Click either to pin a
+geography (click again, click empty map or press Esc to unpin). The pinned
+geography's details stay in a card on the map.
+
+The toolbar switches the map color (opportunity **rank**, the **numerator**,
+or **outlines** only), the basemap (**light**, **streets** or **aerial**
+imagery, all keyless Esri tiles) and the fill opacity. These controls work in
+saved HTML files too.
+
+Besides plotly and htmlwidgets, the linked map needs `sf` and `jsonlite`
+(and `shiny` for the Shiny bindings):
+
+```r
+install.packages(c("plotly", "htmlwidgets", "sf", "jsonlite"))
+```
+
+```r
+tracts <- prepare_spatial_fhlus(tract_sf, area_crs = 3310,
+                                exclude_layer = parks_sf)
+result <- fhlus_score(tracts, numerator = "units", rank_var = "median_income",
+                      denom = "available_area", missing_pct = 0.10, graph = FALSE)
+
+w <- fhlus_linked(result, tooltip_vars = c("Median rent" = "median_rent"),
+                  show_ci_bands = TRUE)
+w
+fhlus_save_html(w, "fhlus_linked.html")
+
+# Scored a plain data frame? Pass the polygons separately, matched by ID
+fhlus_linked(result, geometry = tract_sf, id = "GEOID")
+```
+
+![Linked FHLUS curve and map with a county hovered](man/figures/linked-map.png)
+
+- **Size:** built for neighborhood-level data, from a handful of geographies up
+  to a few thousand tracts (`max_features = 5000` by default). Hover
+  highlighting uses the map's GPU feature state and a light SVG overlay on the
+  curve, so it doesn't redraw either chart. Inputs over 100,000 vertices are
+  simplified automatically.
+- **File size:** a saved file is about 5 MB for 100 counties and about 10 MB
+  for 4,000 tracts (the plotly and MapLibre libraries plus the polygons and
+  pop-ups). The basemap tiles are streamed, so viewing the map needs an
+  internet connection.
+- **Shiny:** use `fhlus_linkedOutput("linked")` and
+  `output$linked <- renderFhlus_linked(fhlus_linked(result))`. Read the
+  hovered and pinned IDs from `input$linked_hover` and
+  `input$linked_selected`.
 
 ### Saving as HTML
 

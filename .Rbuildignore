@@ -18,3 +18,4 @@
 ^SHINY_APP_PLAN\.md$
 ^R/\.Rhistory$
 ^tests/testthat/Rplots\.pdf$
+^MAP_FEATURE_PLAN\.md$

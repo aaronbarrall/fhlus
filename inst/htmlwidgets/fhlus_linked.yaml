@@ -1,0 +1,10 @@
+dependencies:
+  - name: maplibre-gl
+    version: 5.24.1
+    src: htmlwidgets/lib/maplibre-gl-5.24.1
+    script: maplibre-gl.js
+    stylesheet: maplibre-gl.css
+  - name: fhlus-linked
+    version: 0.6.0
+    src: htmlwidgets/lib/fhlus-linked
+    stylesheet: fhlus-linked.css
