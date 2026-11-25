@@ -10,6 +10,8 @@ vignette: >
 ```{r setup, include = FALSE}
 has_plotly <- requireNamespace("plotly", quietly = TRUE) &&
   requireNamespace("htmlwidgets", quietly = TRUE)
+has_map <- has_plotly && requireNamespace("sf", quietly = TRUE) &&
+  requireNamespace("jsonlite", quietly = TRUE)
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = has_plotly)
 ```
 
@@ -23,13 +25,21 @@ This vignette covers:
 1. how each geography appears on the curve,
 2. interactive plots for a single result and for a policy comparison,
 3. what the pop-ups show, and how to add your own variables,
-4. saving plots as standalone HTML files, and
-5. the underlying data and use in Shiny.
+4. a map linked to the curve,
+5. saving plots as standalone HTML files, and
+6. the underlying data and use in Shiny.
 
 The interactive functions need two optional packages:
 
 ```{r, eval = FALSE}
 install.packages(c("plotly", "htmlwidgets"))
+```
+
+The linked map (`fhlus_linked()`) also needs `sf` and `jsonlite`, and its Shiny
+bindings need `shiny`:
+
+```{r, eval = FALSE}
+install.packages(c("sf", "jsonlite"))
 ```
 
 ## Example data
@@ -179,6 +189,67 @@ different denominators), each curve gets its own hover target, and the pop-up
 is for the geography on whichever curve is closest. A geography that appears in
 only one result is marked *Not in this result*.
 
+## Linked map
+
+`fhlus_linked()` puts the curve next to a map of the same geographies and
+links them both ways:
+
+- hover a segment of the curve and its neighborhood is outlined on the map;
+- hover a neighborhood and its segment is highlighted on the curve, with the
+  same pop-up;
+- click either to **pin** a geography. Its details stay in a card on the map.
+  Click it again, click an empty part of the map, or press Esc to unpin.
+
+The toolbar above the panels switches the map color (opportunity **rank**, the
+**numerator**, or **outlines** only), the basemap (**light**, **streets** or
+**aerial** imagery) and the fill opacity. These controls also work in a saved
+HTML file. The basemap tiles are Esri's and need no API key. They are
+downloaded when the page is viewed, so the map needs an internet connection.
+
+The map needs polygons. The usual route is to prepare the geographies with
+`prepare_spatial_fhlus()` and score the resulting sf object, so the result
+carries its own geometry. Here we use the North Carolina counties that ship
+with sf:
+
+```{r linked, eval = has_map, fig.height = 6}
+nc <- sf::st_read(system.file("shape/nc.shp", package = "sf"), quiet = TRUE)
+nc <- prepare_spatial_fhlus(nc, area_crs = 32119, verbose = FALSE)
+nc$nonwhite_share <- nc$NWBIR74 / nc$BIR74
+
+nc_result <- fhlus_score(nc, numerator = "BIR74", rank_var = "nonwhite_share",
+                         denom = "available_area", missing_pct = 0.10,
+                         graph = FALSE)
+
+fhlus_linked(nc_result, id = "NAME",
+             tooltip_vars = c("SIDS deaths 1974" = "SID74"),
+             show_ci_bands = TRUE, height = 860)
+```
+
+If you scored a plain data frame, pass the polygons separately. They are
+matched on the ID column:
+
+```{r linked-geometry, eval = FALSE}
+fhlus_linked(result, geometry = tracts_sf, id = "GEOID")
+```
+
+Geographies without a polygon still appear on the curve and are counted in a
+note on the map. Extra polygons that aren't in the result are left off.
+
+| Argument | Purpose |
+|---|---|
+| `fill_by` | Initial map coloring: `"rank"` (default), `"numerator"` or `"none"` |
+| `basemap` | Initial basemap: `"light"` (default), `"streets"`, `"aerial"` or `"none"` |
+| `fill_opacity` | Initial fill opacity (0-1) |
+| `layout` | `"side"` (plot left, map right) or `"stacked"`; narrow windows always stack |
+| `simplify` | Simplification tolerance in meters; by default only inputs over 100,000 vertices are simplified |
+| `max_features` | Upper limit on geographies (default 5,000) |
+| `...` | Passed to `fhlus_interactive()`, e.g. `title`, `show_ci_bands`, `color_var` |
+
+The map is built for neighborhood-level data, up to a few thousand tracts.
+Hover highlighting only changes styles (MapLibre feature state on the map, a
+light SVG overlay on the curve), so neither chart is redrawn while you move
+the mouse.
+
 ## Saving as HTML
 
 Any interactive plot can be saved as an HTML file that opens in any web browser,
@@ -194,6 +265,9 @@ fhlus_save_html(result, "fhlus_tracts.html", tooltip_vars = "median_rent")
 # Comparisons: save the widget
 cmp <- fhlus_compare_interactive(result, result_aff)
 fhlus_save_html(cmp, "fhlus_comparison.html")
+
+# Linked plot + map
+fhlus_save_html(fhlus_linked(nc_result), "fhlus_linked.html")
 ```
 
 By default the file is **self-contained**: everything is embedded in that one
@@ -201,7 +275,8 @@ file (about 4 MB, mostly the plotly library), so you can email or post it as-is.
 A single-file export needs pandoc, which comes with RStudio, Positron and
 Quarto. Without pandoc, `fhlus_save_html()` warns you and puts the supporting
 files in a `<name>_files/` folder next to the HTML. Keep that folder with the
-file.
+file. A linked map file is larger: about 5 MB for 100 counties and 10 MB for
+4,000 tracts.
 
 ## The data behind the plot
 
@@ -231,7 +306,7 @@ segs[order(-segs$concentration), c("id", "median_income", "housing_units", "conc
 ```
 
 Because the table is keyed by geography ID, it joins directly to spatial data
-for mapping:
+if you want to build your own maps (`fhlus_linked()` does this for you):
 
 ```{r join, eval = FALSE}
 tracts_map <- dplyr::left_join(tracts_sf, segs, by = c("GEOID" = "id"))
@@ -265,10 +340,32 @@ server <- function(input, output, session) {
 shinyApp(ui, server)
 ```
 
+For the linked map, use `fhlus_linkedOutput()` and `renderFhlus_linked()`. The
+hovered and pinned geography IDs arrive as `input$<outputId>_hover` and
+`input$<outputId>_selected` (`NULL` when nothing is hovered or pinned):
+
+```{r shiny-linked, eval = FALSE}
+ui <- fluidPage(
+  fhlus_linkedOutput("linked", height = "640px"),
+  verbatimTextOutput("picked")
+)
+
+server <- function(input, output, session) {
+  output$linked <- renderFhlus_linked(fhlus_linked(nc_result, id = "NAME"))
+  output$picked <- renderPrint(
+    list(hovered = input$linked_hover, pinned = input$linked_selected)
+  )
+}
+
+shinyApp(ui, server)
+```
+
 ## Tips
 
 - **Large inputs:** above 2,000 geographies, the plot automatically switches to
-  WebGL rendering so hovering stays responsive.
+  WebGL rendering so hovering stays responsive. In `fhlus_linked()`, the black
+  boundary dots are hidden above 500 geographies (pass `boundary_label` to
+  show them).
 - **Older results:** results from earlier fhlus versions don't record their
   column names. Pass `numerator`, `denom` and `rank_var` to
   `fhlus_interactive()` or `fhlus_segments()`.

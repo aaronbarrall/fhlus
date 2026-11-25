@@ -517,9 +517,11 @@ fhlus_compare_interactive <- function(result_a, result_b,
 #' browser, without R. By default the file is fully self-contained (all
 #' JavaScript and CSS embedded), so it can be emailed or posted as-is.
 #'
-#' @param x A widget from \code{fhlus_interactive()} or
-#'   \code{fhlus_compare_interactive()}, or an "fhlus" result (in which case
-#'   \code{fhlus_interactive(x, ...)} is called first).
+#' @param x A widget from \code{fhlus_interactive()},
+#'   \code{fhlus_compare_interactive()} or \code{fhlus_linked()}, or an
+#'   "fhlus" result (in which case \code{fhlus_interactive(x, ...)} is called
+#'   first). A linked map's basemap tiles are not embedded; they load from the
+#'   internet when the file is viewed.
 #' @param file Path of the HTML file to write.
 #' @param selfcontained Logical, whether to embed all dependencies in the one
 #'   file. This needs pandoc (bundled with RStudio, Positron and Quarto); if
@@ -560,8 +562,8 @@ fhlus_save_html <- function(x, file, selfcontained = TRUE,
     stop("fhlus_compare objects do not keep the underlying data. ",
          "Use fhlus_compare_interactive(result_a, result_b) and save that widget.")
   } else if (!inherits(x, "htmlwidget")) {
-    stop("x must be an htmlwidget (from fhlus_interactive() or ",
-         "fhlus_compare_interactive()) or an 'fhlus' result.")
+    stop("x must be an htmlwidget (from fhlus_interactive(), ",
+         "fhlus_compare_interactive() or fhlus_linked()) or an 'fhlus' result.")
   }
 
   out_dir <- dirname(file)

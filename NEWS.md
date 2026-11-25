@@ -2,6 +2,12 @@
 
 ## New Features
 
+### Linked Plot and Map
+
+* New `fhlus_linked()` shows the interactive FHLUS curve next to a map of the same geographies (MapLibre GL), linked both ways: hovering a segment outlines its neighborhood, hovering a neighborhood highlights its segment, and clicking either pins it. The map can be colored by rank or by the numerator, or shown as outlines, over a light, street or aerial basemap (keyless Esri tiles); all of these switch in the page and work in files saved with `fhlus_save_html()`. It takes the geometry from results computed on sf data (e.g. after `prepare_spatial_fhlus()`), or from a separate `geometry` layer matched by ID. Supports up to `max_features = 5000` geographies, simplifying large inputs automatically.
+* New Shiny bindings `fhlus_linkedOutput()` and `renderFhlus_linked()`; the hovered and pinned IDs arrive as `input$<id>_hover` and `input$<id>_selected`.
+* MapLibre GL JS 5.24.1 (BSD-3-Clause) is bundled in `inst/htmlwidgets/lib/`.
+
 ### Boundary Clipping and Numerator Joins
 
 * `prepare_spatial_fhlus()` can now clip neighborhoods to a jurisdiction (`boundary`) and sum a spatial numerator layer into them (`numerator`, `numerator_vars`), in a fixed order: reproject, clip, calculate areas and exclusions, assign the numerator. It prints numbered progress steps (`verbose = TRUE`), and warns up front when a job looks slow (lat/lon data, very detailed boundary or exclusion layers, very large numerator layers).
@@ -11,6 +17,7 @@
 
 ## Bug Fixes
 
+* `fhlus_score()` no longer fails on sf input when `verbose = TRUE` (the default). The NA/Inf checks picked up the sticky geometry column.
 * `aggregate_to_neighborhoods()` now wraps `assign_to_neighborhoods()`. Previously a point on a shared tract edge was counted in both tracts, polygon features were counted in full in every tract they touched, and features outside every tract were dropped silently (they now trigger a warning).
 
 ## Documentation

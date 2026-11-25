@@ -2,7 +2,9 @@ Package: fhlus
 Title: Fair Housing Land Use Score Calculation
 Version: 0.5.0
 Authors@R: c(
-    person("Aaron Barrall",, email = "aaronbarrall@ucla.edu", role = c("aut", "cre"))
+    person("Aaron Barrall",, email = "aaronbarrall@ucla.edu", role = c("aut", "cre")),
+    person("MapLibre contributors", role = c("ctb", "cph"),
+           comment = "MapLibre GL JS library; see inst/COPYRIGHTS")
     )
 Description: Calculate the Fair Housing Land Use Score (FHLUS), a statistical measure
     that analyzes the spatial distribution of housing units (or other variables) across
@@ -32,6 +34,8 @@ Imports:
 Suggests:
     plotly (>= 4.10.0),
     htmlwidgets (>= 1.5.0),
+    htmltools,
+    shiny,
     sf,
     spdep,
     furrr,

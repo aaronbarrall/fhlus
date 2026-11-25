@@ -20,3 +20,6 @@ tests/testthat/Rplots.pdf
 # Built vignettes (devtools::build_vignettes)
 /doc/
 /Meta/
+MAP_FEATURE_PLAN.md
+
+**/*.quarto_ipynb

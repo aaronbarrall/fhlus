@@ -266,14 +266,14 @@ validate_inputs <- function(df, numerator, rank_var, denom, verbose,
 
   # Check for NA and infinite values (warnings only)
   if (verbose) {
-    na_counts <- sapply(df[c(numerator, rank_cols, denom)], function(x) sum(is.na(x)))
+    na_counts <- vapply(unique(c(numerator, rank_cols, denom)), function(col) sum(is.na(df[[col]])), numeric(1))
     if (any(na_counts > 0)) {
       warning(sprintf(
         "NA values found in: %s. These rows will be excluded from calculations.",
         paste(names(na_counts)[na_counts > 0], collapse = ", ")
       ))
     }
-    inf_counts <- sapply(df[c(numerator, denom)], function(x) sum(is.infinite(x)))
+    inf_counts <- vapply(unique(c(numerator, denom)), function(col) sum(is.infinite(df[[col]])), numeric(1))
     if (any(inf_counts > 0)) {
       warning(sprintf(
         "Infinite values found in: %s. These rows will be excluded from calculations.",

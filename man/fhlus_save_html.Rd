@@ -14,9 +14,11 @@ fhlus_save_html(
 )
 }
 \arguments{
-\item{x}{A widget from \code{fhlus_interactive()} or
-\code{fhlus_compare_interactive()}, or an "fhlus" result (in which case
-\code{fhlus_interactive(x, ...)} is called first).}
+\item{x}{A widget from \code{fhlus_interactive()},
+\code{fhlus_compare_interactive()} or \code{fhlus_linked()}, or an
+"fhlus" result (in which case \code{fhlus_interactive(x, ...)} is called
+first). A linked map's basemap tiles are not embedded; they load from the
+internet when the file is viewed.}
 
 \item{file}{Path of the HTML file to write.}
 
