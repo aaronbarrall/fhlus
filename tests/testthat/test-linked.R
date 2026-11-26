@@ -222,3 +222,124 @@ test_that("Shiny bindings are available", {
   expect_match(as.character(out), "fhlus_linked")
   expect_true(is.function(renderFhlus_linked(NULL)))
 })
+
+# ---- Numerator features -----------------------------------------------------
+
+# Points inside cells 1, 1, 2 and 6 of make_linked_sf(), plus one far outside
+make_linked_points <- function() {
+  sf::st_sf(
+    project = c("A", "B", "C", "D", "E"),
+    units = c(10, 40, 5, 100, 7),
+    geometry = sf::st_sfc(
+      sf::st_point(c(380200, 3770200)), sf::st_point(c(380800, 3770700)),
+      sf::st_point(c(381500, 3770500)), sf::st_point(c(381500, 3771500)),
+      sf::st_point(c(390000, 3790000)),
+      crs = 32611
+    )
+  )
+}
+
+parse_sites <- function(w) {
+  jsonlite::fromJSON(as.character(w$x$sites$geojson), simplifyVector = FALSE)
+}
+
+test_that("numerator points are linked to the geography containing them", {
+  geo <- make_linked_sf()
+  result <- linked_result(geo)
+  seg <- fhlus_segments(result)
+  pts <- make_linked_points()
+
+  expect_message(
+    w <- fhlus_linked(result, numerator_layer = pts,
+                      numerator_tooltip_vars = c("Project" = "project")),
+    "1 of 5 numerator_layer features are outside"
+  )
+  s <- w$x$sites
+  expect_equal(s$kind, "point")
+  expect_equal(s$n, 5)
+  expect_equal(s$n_outside, 1)
+  expect_equal(s$label, "units")   # numerator_var defaults to the result's numerator
+
+  feats <- parse_sites(w)$features
+  g <- vapply(feats, function(f) f$properties$g, numeric(1))
+  expect_equal(seg$id[g[1:4] + 1], geo$GEOID[c(1, 1, 2, 6)])
+  expect_equal(g[5], -1)
+  # WGS84 coordinates
+  expect_true(abs(feats[[1]]$geometry$coordinates[[1]] + 118) < 2)
+
+  # Sized by value: the largest value gets the largest radius
+  r <- vapply(feats, function(f) f$properties$r, numeric(1))
+  expect_equal(which.max(r), 4)
+  expect_length(s$legend$sizes, 2)
+
+  expect_match(s$tips[1], "Project")
+  expect_match(s$tips[1], geo$GEOID[1])
+  expect_match(s$tips[5], "Outside")
+
+  # Geography tooltips gain a count and total of the features
+  i1 <- match(geo$GEOID[1], seg$id)
+  expect_match(w$x$tips[i1], "2 points")
+  expect_match(w$x$tips[i1], "50 total")
+})
+
+test_that("numerator_var and numerator_label can be set, or features just counted", {
+  result <- linked_result()
+  pts <- make_linked_points()
+  names(pts)[names(pts) == "units"] <- "new_units"
+
+  w <- suppressMessages(fhlus_linked(result, numerator_layer = pts))
+  expect_equal(w$x$sites$label, "Features")
+  expect_null(w$x$sites$legend$sizes)
+
+  w <- suppressMessages(fhlus_linked(result, numerator_layer = pts,
+                                     numerator_var = "new_units",
+                                     numerator_label = "Projects"))
+  expect_equal(w$x$sites$label, "Projects")
+  expect_match(w$x$sites$tips[1], "new_units")
+})
+
+test_that("numerator polygons are linked by their point on surface", {
+  geo <- make_linked_sf()
+  result <- linked_result(geo)
+  seg <- fhlus_segments(result)
+  sq <- function(x, y, s = 200) {
+    sf::st_polygon(list(rbind(c(x, y), c(x + s, y), c(x + s, y + s), c(x, y + s), c(x, y))))
+  }
+  parcels <- sf::st_sf(
+    units = c(3, 8),
+    geometry = sf::st_sfc(sq(380100, 3770100), sq(382300, 3771300), crs = 32611)
+  )
+  w <- fhlus_linked(result, numerator_layer = parcels)
+  expect_equal(w$x$sites$kind, "polygon")
+  feats <- parse_sites(w)$features
+  expect_true(feats[[1]]$geometry$type %in% c("Polygon", "MultiPolygon"))
+  g <- vapply(feats, function(f) f$properties$g, numeric(1))
+  expect_equal(seg$id[g + 1], geo$GEOID[c(1, 7)])
+  expect_null(feats[[1]]$properties$r)
+})
+
+test_that("bad numerator_layer inputs give clear errors", {
+  result <- linked_result()
+  pts <- make_linked_points()
+  expect_error(fhlus_linked(result, numerator_layer = sf::st_drop_geometry(pts)),
+               "must be an sf object")
+  expect_error(fhlus_linked(result, numerator_layer = pts, numerator_var = "nope"),
+               "numerator_var must be one column")
+  expect_error(fhlus_linked(result, numerator_layer = pts, numerator_var = "project"),
+               "must be numeric")
+  expect_error(fhlus_linked(result, numerator_layer = pts, numerator_tooltip_vars = "nope"),
+               "not found in numerator_layer")
+  expect_error(fhlus_linked(result, numerator_layer = pts, max_numerator_features = 3),
+               "max_numerator_features")
+  lines <- sf::st_sf(units = 1, geometry = sf::st_sfc(
+    sf::st_linestring(rbind(c(380100, 3770100), c(380500, 3770500))), crs = 32611))
+  expect_error(fhlus_linked(result, numerator_layer = lines), "only points")
+  nocrs <- sf::st_set_crs(pts, NA)
+  expect_error(fhlus_linked(result, numerator_layer = nocrs), "coordinate reference system")
+})
+
+test_that("without numerator_layer, no sites are sent", {
+  w <- fhlus_linked(linked_result())
+  expect_null(w$x$sites)
+  expect_false(any(grepl("on map", w$x$tips)))
+})

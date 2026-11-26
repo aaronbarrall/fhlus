@@ -29,6 +29,16 @@
 #' its own geometry. Alternatively, score a plain data frame and pass the
 #' polygons separately via \code{geometry}, matched on the ID column.
 #'
+#' \strong{Numerator features.} When the numerator was built from site-level
+#' data (e.g. housing projects as points, or parcels as polygons, summed into
+#' the geographies with \code{prepare_spatial_fhlus(numerator = )}), pass that
+#' layer as \code{numerator_layer} to draw it on the map. Points are drawn as
+#' circles sized by \code{numerator_var}; polygons are drawn as shapes. Each
+#' feature is linked to the geography that contains it (its point on surface,
+#' for polygons): hovering a feature highlights its geography and segment,
+#' clicking it pins them, and hovering or pinning a geography outlines its
+#' features. The layer can be shown or hidden in the widget.
+#'
 #' Requires the \pkg{plotly}, \pkg{htmlwidgets}, \pkg{sf} and \pkg{jsonlite}
 #' packages.
 #'
@@ -36,6 +46,19 @@
 #' @param geometry Optional sf object with polygon geometry and the ID column.
 #'   If NULL, the geometry of \code{result$data} is used (the result must then
 #'   come from sf data).
+#' @param numerator_layer Optional sf layer of numerator features: only points
+#'   (POINT/MULTIPOINT) or only polygons (POLYGON/MULTIPOLYGON), in any CRS.
+#' @param numerator_var Numeric column of \code{numerator_layer} with each
+#'   feature's value (e.g. \code{"units"}). Points are sized by it, and it is
+#'   shown in the feature tooltips and summed per geography in the geography
+#'   tooltips. If NULL, the result's numerator column is used when
+#'   \code{numerator_layer} has it; otherwise features are only counted.
+#' @param numerator_tooltip_vars Further columns of \code{numerator_layer} to
+#'   show in the feature tooltips (a named vector sets the labels).
+#' @param numerator_label Name of the features in the toolbar, legend and
+#'   tooltips. Defaults to \code{numerator_var}, or "Features".
+#' @param max_numerator_features Maximum number of features in
+#'   \code{numerator_layer}.
 #' @param fill_by Initial map coloring: "rank" (opportunity rank),
 #'   "numerator" (the numerator, e.g. housing units) or "none" (outlines
 #'   only). All three can be switched in the widget.
@@ -45,7 +68,8 @@
 #'   Narrow containers always stack.
 #' @param simplify Polygon simplification tolerance in meters. NULL (default)
 #'   simplifies only large inputs (over 100,000 vertices); FALSE never
-#'   simplifies.
+#'   simplifies. Applies to the geographies and to polygon
+#'   \code{numerator_layer} features separately.
 #' @param max_features Maximum number of geographies. Larger inputs stop with
 #'   an error, since the page would become slow and very large.
 #' @param width,height Widget size (CSS units or pixels), or NULL to fill the
@@ -76,12 +100,17 @@ fhlus_linked <- function(result,
                          geometry = NULL,
                          id = NULL,
                          tooltip_vars = NULL,
+                         numerator_layer = NULL,
+                         numerator_var = NULL,
+                         numerator_tooltip_vars = NULL,
+                         numerator_label = NULL,
                          fill_by = c("rank", "numerator", "none"),
                          basemap = c("light", "streets", "aerial", "none"),
                          fill_opacity = 0.7,
                          layout = c("side", "stacked"),
                          simplify = NULL,
                          max_features = 5000,
+                         max_numerator_features = 50000,
                          width = NULL,
                          height = NULL,
                          elementId = NULL,
@@ -108,6 +137,18 @@ fhlus_linked <- function(result,
 
   geom <- linked_geometry(result, seg, geometry, id)
   geom <- clean_linked_geometry(geom, simplify)
+
+  sites <- NULL
+  tips <- build_tooltips(seg)
+  if (!is.null(numerator_layer)) {
+    sites <- linked_numerator_layer(
+      numerator_layer, geom, seg, meta,
+      var = numerator_var, tooltip_vars = numerator_tooltip_vars,
+      label = numerator_label, simplify = simplify, max_features = max_numerator_features
+    )
+    tips <- paste0(tips, "<br><br>", sites$geo_rows)
+    sites$geo_rows <- NULL
+  }
 
   plot_args <- list(...)
   plot_args$result <- result
@@ -150,7 +191,7 @@ fhlus_linked <- function(result,
     geojson = geometry_to_geojson(geom),
     bounds = I(unname(as.numeric(sf::st_bbox(geom$geometry)))),
     ids = I(seg$id),
-    tips = I(build_tooltips(seg)),
+    tips = I(tips),
     x0 = I(seg$cum_denom_start), x1 = I(seg$cum_denom_end),
     y0 = I(seg$cum_var_start), y1 = I(seg$cum_var_end),
     layers = linked_color_layers(seg, meta),
@@ -159,7 +200,8 @@ fhlus_linked <- function(result,
     fill_opacity = fill_opacity,
     layout = layout,
     color_var = grDevices::rgb(t(grDevices::col2rgb(color_var)), maxColorValue = 255),
-    n_unmapped = sum(!geom$mapped)
+    n_unmapped = sum(!geom$mapped),
+    sites = sites
   )
 
   w <- htmlwidgets::createWidget(
@@ -337,28 +379,37 @@ clean_linked_geometry <- function(geom, simplify) {
   valid <- suppressWarnings(sf::st_collection_extract(valid, "POLYGON"))
   g[idx] <- sf::st_cast(valid, "MULTIPOLYGON")
 
-  if (!isFALSE(simplify)) {
-    tol <- simplify
-    if (is.null(tol)) {
-      n_vertices <- nrow(sf::st_coordinates(g[idx]))
-      if (n_vertices > 1e5) {
-        typical <- sqrt(stats::median(as.numeric(sf::st_area(g[idx]))))
-        tol <- typical * 0.02
-      }
-    }
-    if (!is.null(tol)) {
-      if (!is.numeric(tol) || length(tol) != 1 || tol < 0) {
-        stop("simplify must be NULL, FALSE, or a tolerance in meters.")
-      }
-      simple <- sf::st_simplify(g[idx], preserveTopology = TRUE, dTolerance = tol)
-      keep <- !sf::st_is_empty(simple)
-      g[idx[keep]] <- sf::st_cast(simple[keep], "MULTIPOLYGON")
-    }
-  }
+  g[idx] <- simplify_polygons(g[idx], simplify)
 
   sf::st_geometry(geom) <- g
   geom$mapped <- geom$mapped & !sf::st_is_empty(geom)
   geom
+}
+
+#' Simplify valid WGS84 multipolygons (tolerance in meters)
+#'
+#' NULL simplifies only inputs over 100,000 vertices, with a tolerance of 2%
+#' of the typical feature size; FALSE never simplifies. Features that would
+#' vanish are kept as they are.
+#' @noRd
+simplify_polygons <- function(g, simplify) {
+  if (isFALSE(simplify) || length(g) == 0) return(g)
+  tol <- simplify
+  if (is.null(tol)) {
+    n_vertices <- nrow(sf::st_coordinates(g))
+    if (n_vertices > 1e5) {
+      typical <- sqrt(stats::median(as.numeric(sf::st_area(g))))
+      tol <- typical * 0.02
+    }
+  }
+  if (is.null(tol)) return(g)
+  if (!is.numeric(tol) || length(tol) != 1 || tol < 0) {
+    stop("simplify must be NULL, FALSE, or a tolerance in meters.")
+  }
+  simple <- sf::st_simplify(g, preserveTopology = TRUE, dTolerance = tol)
+  keep <- !sf::st_is_empty(simple)
+  g[keep] <- sf::st_cast(simple[keep], "MULTIPOLYGON")
+  g
 }
 
 #' GeoJSON text for the mapped polygons
@@ -368,13 +419,173 @@ clean_linked_geometry <- function(geom, simplify) {
 #' @noRd
 geometry_to_geojson <- function(geom) {
   idx <- which(geom$mapped)
-  out <- sf::st_sf(i = idx - 1L, geometry = sf::st_geometry(geom)[idx])
+  sf_to_geojson(sf::st_sf(i = idx - 1L, geometry = sf::st_geometry(geom)[idx]))
+}
+
+#' GeoJSON text for an sf object in WGS84, classed so htmlwidgets embeds it
+#' verbatim
+#' @noRd
+sf_to_geojson <- function(out) {
   tmp <- tempfile(fileext = ".geojson")
   on.exit(unlink(tmp), add = TRUE)
   sf::st_write(out, tmp, driver = "GeoJSON", quiet = TRUE,
                layer_options = c("COORDINATE_PRECISION=6", "RFC7946=YES"))
   # Class "json" makes htmlwidgets embed it verbatim instead of as a string
   structure(paste(readLines(tmp, warn = FALSE), collapse = ""), class = "json")
+}
+
+# ---- Internal helpers: numerator features --------------------------------
+
+LINKED_SITE_COLOR <- "#d6246e"
+LINKED_SITE_EDGE <- "#8f0f45"
+LINKED_SITE_OUTSIDE <- "#9a9a9a"
+LINKED_SITE_RADIUS <- c(2.5, 10)  # px, smallest and largest value
+
+#' Numerator features for the map: GeoJSON, tooltips and legend
+#'
+#' Each feature is linked to the geography containing it (its point on
+#' surface for polygons), using the cleaned WGS84 geography polygons so the
+#' link matches what the map shows. Returns the widget payload plus
+#' `geo_rows`, a tooltip section per geography (feature count and total).
+#' @noRd
+linked_numerator_layer <- function(layer, geom, seg, meta, var, tooltip_vars,
+                                   label, simplify, max_features) {
+  if (!inherits(layer, "sf")) {
+    stop("numerator_layer must be an sf object of points or polygons. Use ",
+         "sf::st_as_sf() to convert, e.g. sf::st_as_sf(df, coords = c(\"lon\", \"lat\"), crs = 4326).")
+  }
+  if (is.na(sf::st_crs(layer))) {
+    stop("numerator_layer has no coordinate reference system. Set one with sf::st_set_crs().")
+  }
+  layer <- layer[!sf::st_is_empty(layer), ]
+  if (nrow(layer) == 0) stop("numerator_layer has no features with geometry.")
+  if (nrow(layer) > max_features) {
+    stop(sprintf(paste0(
+      "numerator_layer has %s features, more than max_numerator_features = %s. ",
+      "Filter or aggregate it first, or raise max_numerator_features if you accept ",
+      "a slower, larger page."),
+      format(nrow(layer), big.mark = ","), format(max_features, big.mark = ",")))
+  }
+
+  types <- setdiff(unique(as.character(sf::st_geometry_type(layer))), "GEOMETRYCOLLECTION")
+  kind <- if (length(types) > 0 && all(types %in% c("POINT", "MULTIPOINT"))) {
+    "point"
+  } else if (length(types) > 0 && all(types %in% c("POLYGON", "MULTIPOLYGON"))) {
+    "polygon"
+  } else {
+    stop("numerator_layer must contain only points (POINT/MULTIPOINT) or only ",
+         "polygons (POLYGON/MULTIPOLYGON). Found: ", paste(types, collapse = ", "))
+  }
+
+  cols <- setdiff(names(layer), attr(layer, "sf_column"))
+  if (is.null(var) && meta$numerator %in% cols) var <- meta$numerator
+  if (!is.null(var)) {
+    if (!is.character(var) || length(var) != 1 || !var %in% cols) {
+      stop(sprintf("numerator_var must be one column of numerator_layer. Available columns: %s",
+                   paste(cols, collapse = ", ")))
+    }
+    if (!is.numeric(layer[[var]])) stop(sprintf("numerator_var '%s' must be numeric.", var))
+  }
+  if (!is.null(tooltip_vars)) {
+    if (!is.character(tooltip_vars)) {
+      stop("numerator_tooltip_vars must be a character vector of column names.")
+    }
+    miss <- setdiff(tooltip_vars, cols)
+    if (length(miss) > 0) {
+      stop(sprintf("numerator_tooltip_vars not found in numerator_layer: %s. Available columns: %s",
+                   paste(miss, collapse = ", "), paste(cols, collapse = ", ")))
+    }
+    labs <- names(tooltip_vars)
+    if (is.null(labs)) labs <- rep("", length(tooltip_vars))
+    labs[labs == ""] <- tooltip_vars[labs == ""]
+    tooltip_vars <- stats::setNames(unname(tooltip_vars), labs)
+  }
+  if (is.null(label)) label <- if (!is.null(var)) var else "Features"
+
+  layer <- sf::st_transform(layer, 4326)
+  g <- sf::st_geometry(layer)
+  if (kind == "polygon") {
+    g <- sf::st_make_valid(g)
+    g <- suppressWarnings(sf::st_collection_extract(g, "POLYGON"))
+    g <- simplify_polygons(sf::st_cast(g, "MULTIPOLYGON"), simplify)
+  }
+
+  # Link each feature to its geography. Planar tests in lon/lat match the
+  # map and avoid s2, which rejects some real-world polygons.
+  old_s2 <- suppressMessages(sf::sf_use_s2(FALSE))
+  on.exit(suppressMessages(sf::sf_use_s2(old_s2)), add = TRUE)
+  pts <- suppressMessages(representative_points(sf::st_sf(geometry = g), kind))
+  mapped <- which(geom$mapped)
+  hits <- suppressMessages(sf::st_intersects(pts, sf::st_geometry(geom)[mapped]))
+  gi <- vapply(hits, function(h) if (length(h) > 0) mapped[h[1]] - 1L else -1L, integer(1))
+  n_outside <- sum(gi < 0)
+  if (n_outside > 0) {
+    message(sprintf("%s of %s numerator_layer features are outside every mapped geography; they are drawn in grey.",
+                    format(n_outside, big.mark = ","), format(length(gi), big.mark = ",")))
+  }
+
+  v <- if (!is.null(var)) as.numeric(layer[[var]]) else NULL
+  props <- data.frame(j = seq_along(gi) - 1L, g = gi)
+  legend <- list(label = html_escape(label))
+  if (kind == "point") {
+    vmax <- if (!is.null(v)) suppressWarnings(max(v, na.rm = TRUE)) else -Inf
+    if (is.finite(vmax) && vmax > 0) {
+      r <- LINKED_SITE_RADIUS[1] + diff(LINKED_SITE_RADIUS) * sqrt(pmax(v, 0) / vmax)
+      r[is.na(r)] <- LINKED_SITE_RADIUS[1]
+      vmin <- min(v[v > 0], na.rm = TRUE)
+      legend$sizes <- list(
+        list(r = LINKED_SITE_RADIUS[1] + diff(LINKED_SITE_RADIUS) * sqrt(vmin / vmax),
+             label = fmt_value(vmin)),
+        list(r = LINKED_SITE_RADIUS[2], label = fmt_value(vmax))
+      )
+    } else {
+      r <- rep(4.5, length(gi))
+    }
+    props$r <- round(r, 2)
+  }
+
+  # Feature tooltips
+  rows <- list()
+  rows[[1]] <- if (!is.null(var)) {
+    tt_row(var, fmt_value(v))
+  } else {
+    rep(paste0("<b>", html_escape(label), "</b>"), length(gi))
+  }
+  for (k in seq_along(tooltip_vars)) {
+    rows[[length(rows) + 1]] <- tt_row(names(tooltip_vars)[k], fmt_value(layer[[tooltip_vars[k]]]))
+  }
+  where <- ifelse(gi >= 0,
+                  paste0(tt_muted("In "), tt_title(attr(seg, "id_col"), seg$id[pmax(gi, 0) + 1])),
+                  tt_muted("Outside every mapped geography"))
+  site_tips <- tt_compose(list(rows, list(where)))
+
+  # Per-geography summary for the geography tooltips
+  inside <- gi >= 0
+  n_per <- tabulate(gi[inside] + 1L, nbins = nrow(seg))
+  geo_rows <- tt_row(paste(label, "on map"),
+                     paste0(fmt_value(n_per), if (kind == "point") " points" else " shapes"))
+  if (!is.null(var)) {
+    tot <- numeric(nrow(seg))
+    s <- rowsum(ifelse(is.na(v[inside]), 0, v[inside]), gi[inside] + 1L)
+    tot[as.integer(rownames(s))] <- s[, 1]
+    geo_rows <- paste0(geo_rows, ifelse(n_per > 0,
+                                        paste0(TT_GAP, tt_muted(paste0("(", fmt_value(tot), " total)"))),
+                                        ""))
+  }
+
+  list(
+    kind = kind,
+    geojson = sf_to_geojson(sf::st_sf(props, geometry = g)),
+    tips = I(site_tips),
+    label = html_escape(label),
+    n = length(gi),
+    n_outside = n_outside,
+    color = LINKED_SITE_COLOR,
+    edge = LINKED_SITE_EDGE,
+    outside_color = LINKED_SITE_OUTSIDE,
+    legend = legend,
+    geo_rows = geo_rows
+  )
 }
 
 # ---- Internal helpers: colors --------------------------------------------

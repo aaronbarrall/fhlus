@@ -4,8 +4,13 @@
  * Every geography has an index i (its row in the segment table, ordered by
  * rank). The map's GeoJSON features carry only `i` (promoted to the feature
  * id), so hover/pin styling is done with MapLibre feature-state and never
- * re-uploads data. The curve is highlighted with plotly layout shapes,
- * redrawn at most once per animation frame.
+ * re-uploads data. The curve is highlighted in an SVG overlay, redrawn at
+ * most once per animation frame.
+ *
+ * Optional numerator features (x.sites: points or polygons) carry `j` (their
+ * own index) and `g` (the index of the geography containing them, -1 if
+ * none), so hovering a feature links to its geography, and a geography's
+ * features are outlined with a layer filter on `g`.
  */
 (function () {
   'use strict';
@@ -101,9 +106,17 @@
       bbox[i] = b;
     });
 
+    var sites = x.sites || null;
+    var siteGj = sites ? (typeof sites.geojson === 'string' ? JSON.parse(sites.geojson) : sites.geojson) : null;
+    var siteLayers = !sites ? [] : sites.kind === 'point' ? ['fhl-site-pt'] : ['fhl-site-fill'];
+    var siteAll = !sites ? [] : sites.kind === 'point' ? ['fhl-site-pt', 'fhl-site-hl'] :
+      ['fhl-site-fill', 'fhl-site-line', 'fhl-site-hl'];
+
     var state = {
       hovered: null,
       pinned: null,
+      siteHovered: null,
+      showSites: true,
       fillBy: layerByKey[x.fill_by] || x.fill_by === 'none' ? x.fill_by : 'rank',
       basemap: x.basemap,
       opacity: x.fill_opacity,
@@ -136,6 +149,10 @@
     segmented(bar, 'Basemap', BASEMAP_ORDER.map(function (k) {
       return {key: k, label: k === 'none' ? 'None' : BASEMAPS[k].label};
     }), state.basemap, setBasemap);
+    if (sites) {
+      segmented(bar, sites.label, [{key: 'show', label: 'Show'}, {key: 'hide', label: 'Hide'}],
+                'show', function (k) { setShowSites(k === 'show'); });
+    }
 
     var opGroup = h('label', 'fhl-group', bar);
     h('span', 'fhl-label', opGroup, 'Opacity');
@@ -294,6 +311,7 @@
         map.addLayer({id: 'bml-' + k, type: 'raster', source: 'bml-' + k,
                       layout: {visibility: k === state.basemap ? 'visible' : 'none'}});
       });
+      if (sites) addSiteLayers();
       map.addLayer({id: 'fhl-halo', type: 'line', source: 'fhl',
                     layout: {'line-join': 'round'},
                     paint: {'line-color': '#ffffff', 'line-opacity': 0.95,
@@ -302,33 +320,120 @@
                     layout: {'line-join': 'round'},
                     paint: {'line-color': ['case', PIN, '#111111', x.color_var],
                             'line-width': ['case', HOV, 3, PIN, 2.5, 0]}});
+      // Points stay above the geography outlines so they remain hoverable
+      if (sites && sites.kind === 'point') {
+        map.moveLayer('fhl-site-pt');
+        map.moveLayer('fhl-site-hl');
+      } else if (sites) {
+        map.moveLayer('fhl-site-hl');
+      }
       state.mapReady = true;
+      applySiteFilter();
       applyOpacity();
       if (state.hovered !== null) map.setFeatureState({source: 'fhl', id: state.hovered}, {hover: true});
       if (state.pinned !== null) map.setFeatureState({source: 'fhl', id: state.pinned}, {pin: true});
     });
 
-    map.on('mousemove', 'fhl-fill', function (e) {
-      if (!e.features.length) return;
-      var i = e.features[0].id;
-      map.getCanvas().style.cursor = 'pointer';
-      setHover(i);
-      showTip(i, e.point);
-    });
-    map.on('mouseleave', 'fhl-fill', function () {
+    // Numerator features take priority over the geography under them.
+    // Points get a few pixels of slack so small circles are easy to hit.
+    function pick(pt) {
+      if (!state.mapReady) return null;
+      if (sites && state.showSites) {
+        var box = sites.kind === 'point' ? [[pt.x - 3, pt.y - 3], [pt.x + 3, pt.y + 3]] : pt;
+        var sf = map.queryRenderedFeatures(box, {layers: siteLayers});
+        if (sf.length) {
+          var g = sf[0].properties.g;
+          return {site: sf[0].id, i: g >= 0 ? g : null};
+        }
+      }
+      var fs = map.queryRenderedFeatures(pt, {layers: ['fhl-fill']});
+      return fs.length ? {site: null, i: fs[0].id} : null;
+    }
+    function clearMapHover() {
       map.getCanvas().style.cursor = '';
+      setSiteHover(null);
       setHover(null);
       tip.style.display = 'none';
+    }
+    map.on('mousemove', function (e) {
+      var hit = pick(e.point);
+      if (!hit) { clearMapHover(); return; }
+      map.getCanvas().style.cursor = 'pointer';
+      setSiteHover(hit.site);
+      setHover(hit.i);
+      showTip(hit.site !== null ? sites.tips[hit.site] : x.tips[hit.i], e.point);
     });
+    map.getCanvas().addEventListener('mouseleave', clearMapHover);
     map.on('click', function (e) {
-      var fs = state.mapReady ? map.queryRenderedFeatures(e.point, {layers: ['fhl-fill']}) : [];
-      if (fs.length) {
-        var i = fs[0].id;
-        setPin(state.pinned === i ? null : i, false);
-      } else {
+      var hit = pick(e.point);
+      if (hit && hit.i !== null) {
+        setPin(state.pinned === hit.i ? null : hit.i, false);
+      } else if (!hit || hit.site === null) {
         setPin(null, false);
       }
     });
+
+    // ---- Numerator features ------------------------------------------
+    var SHOV = ['boolean', ['feature-state', 'hover'], false];
+    function addSiteLayers() {
+      map.addSource('fhl-sites', {type: 'geojson', data: siteGj, promoteId: 'j'});
+      var fill = ['case', ['<', ['get', 'g'], 0], sites.outside_color, sites.color];
+      if (sites.kind === 'point') {
+        map.addLayer({id: 'fhl-site-pt', type: 'circle', source: 'fhl-sites',
+                      paint: {'circle-radius': ['get', 'r'], 'circle-color': fill,
+                              'circle-opacity': 0.85,
+                              'circle-stroke-color': ['case', SHOV, '#111111', '#ffffff'],
+                              'circle-stroke-width': ['case', SHOV, 2.5, 1]}});
+        // Features of the hovered / pinned geography
+        map.addLayer({id: 'fhl-site-hl', type: 'circle', source: 'fhl-sites',
+                      filter: ['==', ['get', 'g'], -2],
+                      paint: {'circle-radius': ['+', ['get', 'r'], 1], 'circle-color': fill,
+                              'circle-stroke-color': '#111111',
+                              'circle-stroke-width': ['case', SHOV, 3, 1.8]}});
+      } else {
+        map.addLayer({id: 'fhl-site-fill', type: 'fill', source: 'fhl-sites',
+                      paint: {'fill-color': fill,
+                              'fill-opacity': ['case', SHOV, 0.85, 0.6]}});
+        map.addLayer({id: 'fhl-site-line', type: 'line', source: 'fhl-sites',
+                      paint: {'line-color': ['case', ['<', ['get', 'g'], 0], '#666666', sites.edge],
+                              'line-width': 0.8}});
+        map.addLayer({id: 'fhl-site-hl', type: 'line', source: 'fhl-sites',
+                      filter: ['==', ['get', 'g'], -2],
+                      layout: {'line-join': 'round'},
+                      paint: {'line-color': '#111111', 'line-width': ['case', SHOV, 3, 1.8]}});
+      }
+    }
+    var siteFilterKey = null;
+    function applySiteFilter() {
+      if (!sites || !state.mapReady) return;
+      var on = [];
+      if (state.hovered !== null) on.push(state.hovered);
+      if (state.pinned !== null && state.pinned !== state.hovered) on.push(state.pinned);
+      var key = on.join(',');
+      if (key === siteFilterKey) return;
+      siteFilterKey = key;
+      map.setFilter('fhl-site-hl', on.length ? ['in', ['get', 'g'], ['literal', on]] :
+                    ['==', ['get', 'g'], -2]);
+    }
+    function setSiteHover(j) {
+      if (!sites || j === state.siteHovered) return;
+      if (state.mapReady && state.siteHovered !== null) {
+        map.setFeatureState({source: 'fhl-sites', id: state.siteHovered}, {hover: false});
+      }
+      state.siteHovered = j;
+      if (state.mapReady && j !== null) {
+        map.setFeatureState({source: 'fhl-sites', id: j}, {hover: true});
+      }
+    }
+    function setShowSites(v) {
+      state.showSites = v;
+      renderLegend();
+      if (!v) setSiteHover(null);
+      if (!state.mapReady) return;
+      siteAll.forEach(function (id) {
+        map.setLayoutProperty(id, 'visibility', v ? 'visible' : 'none');
+      });
+    }
 
     function fillColor() {
       return state.fillBy === 'none' ? 'rgba(0,0,0,0)' : ['get', 'c_' + state.fillBy];
@@ -388,8 +493,8 @@
     }
 
     // ---- Tooltip, pin card and legend ----------------------------------
-    function showTip(i, pt) {
-      tip.innerHTML = x.tips[i];
+    function showTip(html, pt) {
+      tip.innerHTML = html;
       tip.style.display = 'block';
       var W = mapWrap.clientWidth, H = mapWrap.clientHeight;
       var w = tip.offsetWidth, hh = tip.offsetHeight;
@@ -409,10 +514,34 @@
     }
     cardClose.addEventListener('click', function () { setPin(null, false); });
 
+    function siteLegend() {
+      var g = sites.legend, out = '<div class="fhl-legend-title">' + g.label + '</div>';
+      var dot = function (r, label) {
+        var d = Math.round(2 * r);
+        return '<div class="fhl-legend-row"><span class="fhl-dot-box"><span class="fhl-dot" style="width:' +
+               d + 'px;height:' + d + 'px;background:' + sites.color + '"></span></span>' + label + '</div>';
+      };
+      if (sites.kind === 'polygon') {
+        out += '<div class="fhl-legend-row"><span class="fhl-swatch" style="background:' + sites.color +
+               ';opacity:0.75;outline:1px solid ' + sites.edge + '"></span>' + sites.n + ' shapes</div>';
+      } else if (g.sizes) {
+        g.sizes.forEach(function (s) { out += dot(s.r, s.label); });
+      } else {
+        out += dot(4.5, sites.n + ' points');
+      }
+      if (sites.n_outside > 0) {
+        out += '<div class="fhl-legend-row"><span class="fhl-swatch" style="background:' +
+               sites.outside_color + '"></span>Outside the mapped area</div>';
+      }
+      return out;
+    }
+
     function renderLegend() {
       var L = layerByKey[state.fillBy];
-      if (!L) { legend.style.display = 'none'; return; }
+      var withSites = sites && state.showSites;
+      if (!L && !withSites) { legend.style.display = 'none'; return; }
       legend.style.display = 'block';
+      if (!L) { legend.innerHTML = siteLegend(); return; }
       var g = L.legend, out = '<div class="fhl-legend-title">' + g.title + '</div>';
       if (g.type === 'gradient') {
         out += '<div class="fhl-legend-bar" style="background:linear-gradient(to right,' +
@@ -425,6 +554,7 @@
                  it.color + '"></span>' + it.label + '</div>';
         });
       }
+      if (withSites) out += '<div class="fhl-legend-sep"></div>' + siteLegend();
       legend.innerHTML = out;
     }
     renderLegend();
@@ -439,6 +569,7 @@
       if (state.mapReady && i !== null && hasGeom[i]) {
         map.setFeatureState({source: 'fhl', id: i}, {hover: true});
       }
+      applySiteFilter();
       schedulePlot();
       sendShiny('hover', i);
     }
@@ -454,6 +585,7 @@
         if (fromPlot) ensureVisible(i);
       }
       renderCard();
+      applySiteFilter();
       schedulePlot();
       sendShiny('selected', i);
     }
