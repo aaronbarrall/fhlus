@@ -22,7 +22,12 @@
 #'
 #' @param spatial_data SF object with the neighborhood polygons (e.g., tracts)
 #'   and their attributes (rank variables etc.)
-#' @param area_crs CRS for area calculations (default: use existing CRS, but warn if geographic)
+#' @param area_crs Projected CRS for area calculations and the spatial steps.
+#'   If \code{NULL} (default), a projected \code{spatial_data} keeps its CRS;
+#'   lat/lon data are transformed to the local UTM zone (centred on
+#'   \code{boundary} if given, otherwise on \code{spatial_data}), with a
+#'   message. Areas are then in square meters. Pass a local CRS (e.g. a State
+#'   Plane zone) to control the units and projection.
 #' @param exclude_zones Vector of zone types to exclude (e.g., "Open space")
 #' @param zone_column Column name containing zone information
 #' @param exclude_layer Optional SF object with polygon geometries representing areas to exclude
@@ -150,7 +155,36 @@ prepare_spatial_fhlus <- function(spatial_data,
   n_steps <- 2L + (!is.null(boundary)) + (!is.null(numerator))
   progress <- spatial_progress(n_steps, verbose)
 
-  warn_spatial_workload(spatial_data, area_crs, boundary, exclude_layer,
+  # Empty features (e.g. water-only tracts in Census cartographic boundary
+  # files) have no area and break st_coordinates() and some intersections
+  spatial_data <- drop_empty_geometries(spatial_data, "spatial_data")
+  boundary <- quietly(drop_empty_geometries(boundary, "boundary"))
+  exclude_layer <- quietly(drop_empty_geometries(exclude_layer, "exclude_layer"))
+  numerator <- drop_empty_geometries(numerator, "numerator", warn = TRUE)
+
+  # The area of interest: everything outside it is irrelevant
+  aoi <- if (!is.null(boundary)) boundary else spatial_data
+
+  # Crop a large exclusion layer (e.g. statewide open space) to the area of
+  # interest before it is transformed, counted, repaired or dissolved
+  if (!is.null(exclude_layer) && !is.na(sf::st_crs(exclude_layer)) &&
+      !is.na(sf::st_crs(aoi))) {
+    exclude_layer <- crop_to_bbox(
+      exclude_layer, sf::st_transform(sf::st_geometry(aoi), sf::st_crs(exclude_layer))
+    )
+  }
+
+  # Lat/lon makes sf use s2 spherical geometry, which is slower and rejects
+  # many real-world polygons (e.g. near-duplicate edges); use a planar CRS
+  if (is.null(area_crs) && isTRUE(sf::st_is_longlat(spatial_data))) {
+    auto <- auto_area_crs(aoi)
+    area_crs <- auto$crs
+    message(sprintf(
+      "spatial_data is in lat/lon; using %s for the spatial steps and areas (square meters). Set area_crs to choose a different projected CRS.",
+      auto$label))
+  }
+
+  warn_spatial_workload(spatial_data, boundary, exclude_layer,
                         numerator, numerator_method)
 
   # Transform to appropriate CRS for area calculation if needed
@@ -159,8 +193,6 @@ prepare_spatial_fhlus <- function(spatial_data,
                         if (!is.null(area_crs)) " (transforming CRS)" else ""))
   if (!is.null(area_crs)) {
     spatial_data <- sf::st_transform(spatial_data, area_crs)
-  } else if (sf::st_is_longlat(spatial_data)) {
-    warning("Data is in geographic CRS (lat/lon). Areas may be inaccurate. Consider providing area_crs (e.g., a local UTM zone).")
   }
 
   # Clip to the jurisdictional boundary
@@ -685,6 +717,14 @@ calculate_excluded_areas <- function(spatial_data, exclude_zones, zone_column) {
 #' @noRd
 calculate_excluded_areas_spatial <- function(spatial_data, exclude_layer) {
 
+  # Keep only exclusion features near the source features, so a large layer
+  # (e.g. statewide open space) isn't repaired and dissolved in full
+  exclude_layer <- crop_to_bbox(exclude_layer, spatial_data)
+  if (nrow(exclude_layer) == 0) {
+    message("Exclusion layer does not overlap any source features. No spatial exclusion applied.")
+    return(spatial_data)
+  }
+
   # Validate & repair geometries
   spatial_data <- sf::st_make_valid(spatial_data)
   exclude_layer <- sf::st_make_valid(exclude_layer)
@@ -777,7 +817,7 @@ check_polygon_layer <- function(x, arg) {
   valid_types <- c("POLYGON", "MULTIPOLYGON")
   if (!all(geom_types %in% valid_types)) {
     stop(sprintf(
-      "%s must contain polygon geometries (POLYGON or MULTIPOLYGON). Got: %s.",
+      "%s must contain polygon geometries (POLYGON or MULTIPOLYGON). Got: %s. After sf::st_make_valid(), use sf::st_collection_extract(x, \"POLYGON\") to keep only the polygons.",
       arg, paste(geom_types, collapse = ", ")
     ))
   }
@@ -946,19 +986,79 @@ drop_outside_boundary <- function(numerator, boundary, crs, method) {
 #' @noRd
 count_vertices <- function(x) {
   if (is.null(x)) return(0)
-  nrow(sf::st_coordinates(sf::st_geometry(x)))
+  # Count per feature: st_coordinates() fails on empty features and on mixed
+  # geometry types (sfc_GEOMETRY, e.g. after st_make_valid())
+  n <- vapply(sf::st_geometry(x), function(g) {
+    length(unlist(g, use.names = FALSE)) / nchar(class(g)[1])  # XY = 2 values
+  }, numeric(1))
+  sum(n)
+}
+
+#' Rows of x whose bounding box overlaps the bounding box of y
+#' (same CRS); empty features are dropped
+#' @noRd
+crop_to_bbox <- function(x, y) {
+  bb <- sf::st_bbox(y)
+  fb <- vapply(sf::st_geometry(x), function(g) as.numeric(sf::st_bbox(g)), numeric(4))
+  fb <- matrix(fb, nrow = 4)
+  keep <- fb[1, ] <= bb[["xmax"]] & fb[3, ] >= bb[["xmin"]] &
+    fb[2, ] <= bb[["ymax"]] & fb[4, ] >= bb[["ymin"]]
+  x[!is.na(keep) & keep, ]
+}
+
+#' Pick a projected CRS for a layer's extent
+#'
+#' The WGS 84 UTM zone at the centre of the extent when the whole extent is
+#' within 3 degrees of longitude of the zone's central meridian (area error
+#' about 0.3\% at most), otherwise a Lambert azimuthal equal-area projection
+#' centred on the extent (exact areas at any size, e.g. a whole state).
+#' @return list(crs = EPSG integer or PROJ string, label = text for messages)
+#' @noRd
+auto_area_crs <- function(x) {
+  bb <- sf::st_bbox(sf::st_transform(sf::st_geometry(x), 4326))
+  lon <- (bb[["xmin"]] + bb[["xmax"]]) / 2
+  lat <- (bb[["ymin"]] + bb[["ymax"]]) / 2
+  zone <- min(floor((lon + 180) / 6) + 1, 60)
+  meridian <- zone * 6 - 183
+  reach <- max(abs(bb[["xmin"]] - meridian), abs(bb[["xmax"]] - meridian))
+
+  if (reach <= 3 && abs(lat) < 80) {
+    epsg <- as.integer((if (lat >= 0) 32600 else 32700) + zone)
+    list(crs = epsg,
+         label = sprintf("UTM zone %d%s (EPSG:%d)", zone, if (lat >= 0) "N" else "S", epsg))
+  } else {
+    list(crs = sprintf("+proj=laea +lat_0=%.4f +lon_0=%.4f +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs",
+                       lat, lon),
+         label = sprintf("a Lambert azimuthal equal-area projection centred on %.2f, %.2f",
+                         lat, lon))
+  }
+}
+
+#' Drop features with empty geometry from a layer
+#'
+#' Stops if every feature is empty. Dropped features are reported with a
+#' warning (\code{warn = TRUE}, for layers whose values would be lost) or
+#' otherwise a message.
+#' @noRd
+drop_empty_geometries <- function(x, name, warn = FALSE) {
+  if (is.null(x)) return(x)
+  empty <- sf::st_is_empty(x)
+  if (!any(empty)) return(x)
+  if (all(empty)) {
+    stop(sprintf("All %s geometries in `%s` are empty.",
+                 format_count(length(empty)), name), call. = FALSE)
+  }
+  text <- sprintf("Dropped %s feature%s with empty geometry from `%s`.",
+                  format_count(sum(empty)), if (sum(empty) == 1) "" else "s", name)
+  if (warn) warning(text, call. = FALSE) else message(text)
+  x[!empty, ]
 }
 
 #' Warn when the spatial steps are likely to be slow
 #' @noRd
-warn_spatial_workload <- function(spatial_data, area_crs, boundary, exclude_layer,
+warn_spatial_workload <- function(spatial_data, boundary, exclude_layer,
                                   numerator, numerator_method) {
   reasons <- character(0)
-
-  if (is.null(area_crs) && isTRUE(sf::st_is_longlat(spatial_data)) &&
-      (!is.null(boundary) || !is.null(exclude_layer) || !is.null(numerator))) {
-    reasons <- c(reasons, "data are in lat/lon, so intersections use slower spherical geometry (set area_crs to a projected CRS)")
-  }
 
   heavy_vertices <- count_vertices(boundary) + count_vertices(exclude_layer)
   if (heavy_vertices > 500000) {

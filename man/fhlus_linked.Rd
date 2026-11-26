@@ -9,12 +9,17 @@ fhlus_linked(
   geometry = NULL,
   id = NULL,
   tooltip_vars = NULL,
+  numerator_layer = NULL,
+  numerator_var = NULL,
+  numerator_tooltip_vars = NULL,
+  numerator_label = NULL,
   fill_by = c("rank", "numerator", "none"),
   basemap = c("light", "streets", "aerial", "none"),
   fill_opacity = 0.7,
   layout = c("side", "stacked"),
   simplify = NULL,
   max_features = 5000,
+  max_numerator_features = 50000,
   width = NULL,
   height = NULL,
   elementId = NULL,
@@ -38,6 +43,21 @@ passed to \code{fhlus_score()}, including variables not used for ranking.
 Name the elements to set display labels, e.g.
 \code{c("Median rent" = "med_rent", "Poverty rate" = "pov_rate")}.}
 
+\item{numerator_layer}{Optional sf layer of numerator features: only points
+(POINT/MULTIPOINT) or only polygons (POLYGON/MULTIPOLYGON), in any CRS.}
+
+\item{numerator_var}{Numeric column of \code{numerator_layer} with each
+feature's value (e.g. \code{"units"}). Points are sized by it, and it is
+shown in the feature tooltips and summed per geography in the geography
+tooltips. If NULL, the result's numerator column is used when
+\code{numerator_layer} has it; otherwise features are only counted.}
+
+\item{numerator_tooltip_vars}{Further columns of \code{numerator_layer} to
+show in the feature tooltips (a named vector sets the labels).}
+
+\item{numerator_label}{Name of the features in the toolbar, legend and
+tooltips. Defaults to \code{numerator_var}, or "Features".}
+
 \item{fill_by}{Initial map coloring: "rank" (opportunity rank),
 "numerator" (the numerator, e.g. housing units) or "none" (outlines
 only). All three can be switched in the widget.}
@@ -51,10 +71,14 @@ Narrow containers always stack.}
 
 \item{simplify}{Polygon simplification tolerance in meters. NULL (default)
 simplifies only large inputs (over 100,000 vertices); FALSE never
-simplifies.}
+simplifies. Applies to the geographies and to polygon
+\code{numerator_layer} features separately.}
 
 \item{max_features}{Maximum number of geographies. Larger inputs stop with
 an error, since the page would become slow and very large.}
+
+\item{max_numerator_features}{Maximum number of features in
+\code{numerator_layer}.}
 
 \item{width, height}{Widget size (CSS units or pixels), or NULL to fill the
 container.}
@@ -91,6 +115,16 @@ The usual workflow is to prepare the geographies with
 \code{fhlus_score()}, then pass the result here. The result then carries
 its own geometry. Alternatively, score a plain data frame and pass the
 polygons separately via \code{geometry}, matched on the ID column.
+
+\strong{Numerator features.} When the numerator was built from site-level
+data (e.g. housing projects as points, or parcels as polygons, summed into
+the geographies with \code{prepare_spatial_fhlus(numerator = )}), pass that
+layer as \code{numerator_layer} to draw it on the map. Points are drawn as
+circles sized by \code{numerator_var}; polygons are drawn as shapes. Each
+feature is linked to the geography that contains it (its point on surface,
+for polygons): hovering a feature highlights its geography and segment,
+clicking it pins them, and hovering or pinning a geography outlines its
+features. The layer can be shown or hidden in the widget.
 
 Requires the \pkg{plotly}, \pkg{htmlwidgets}, \pkg{sf} and \pkg{jsonlite}
 packages.

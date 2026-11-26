@@ -5,6 +5,7 @@
 ### Linked Plot and Map
 
 * New `fhlus_linked()` shows the interactive FHLUS curve next to a map of the same geographies (MapLibre GL), linked both ways: hovering a segment outlines its neighborhood, hovering a neighborhood highlights its segment, and clicking either pins it. The map can be colored by rank or by the numerator, or shown as outlines, over a light, street or aerial basemap (keyless Esri tiles); all of these switch in the page and work in files saved with `fhlus_save_html()`. It takes the geometry from results computed on sf data (e.g. after `prepare_spatial_fhlus()`), or from a separate `geometry` layer matched by ID. Supports up to `max_features = 5000` geographies, simplifying large inputs automatically.
+* `fhlus_linked(numerator_layer = )` draws the site-level numerator features on the map: points as circles sized by `numerator_var`, or polygons (e.g. parcels) as shapes. Each feature is linked to the geography containing it, so hovering a feature highlights its geography and curve segment, and hovering or pinning a geography outlines its features. Geography tooltips gain the feature count and total, `numerator_tooltip_vars` adds columns to the feature tooltips, and the layer can be shown or hidden in the page.
 * New Shiny bindings `fhlus_linkedOutput()` and `renderFhlus_linked()`; the hovered and pinned IDs arrive as `input$<id>_hover` and `input$<id>_selected`.
 * MapLibre GL JS 5.24.1 (BSD-3-Clause) is bundled in `inst/htmlwidgets/lib/`.
 
