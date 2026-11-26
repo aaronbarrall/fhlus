@@ -56,8 +56,8 @@ Every function the package exports, grouped by task. The tables below list only 
 
 | Function | What it does | Key arguments |
 |---|---|---|
-| `fhlus_score()` | Calculates FHLUS for one dataset and returns the score, AUC, cumulative curve data, plot and metadata. | `df`, `numerator`, `rank_var`, `denom`, `missing` / `missing_pct` (confidence interval), `tie_breaker`, `exclude_area`, `show_ci_bands`, `graph`, `verbose` |
-| `grouped_fhlus()` | Calculates FHLUS for every group (e.g., each city), one row per group with `score`, `score_lowest`, `score_highest`. Per-group error rates can come from a column. | `df`, `group_var`, the `fhlus_score()` arguments, `graph_subset`, `parallel` (needs `furrr`) |
+| `fhlus_score()` | Calculates FHLUS for one dataset and returns the score, AUC, cumulative curve data, plot and metadata. Rows with a missing rank value are dropped, imputed from their neighbors, or refused (see [Missing rank values](#missing-rank-values)). | `df`, `numerator`, `rank_var`, `denom`, `missing` / `missing_pct` (confidence interval), `tie_breaker`, `exclude_area`, `rank_na`, `show_ci_bands`, `graph`, `verbose` |
+| `grouped_fhlus()` | Calculates FHLUS for every group (e.g., each city), one row per group with `score`, `score_lowest`, `score_highest` (plus `n_rank_imputed` / `n_rank_dropped`). Per-group error rates can come from a column. | `df`, `group_var`, the `fhlus_score()` arguments, `graph_subset`, `parallel` (needs `furrr`) |
 | `calculate_multiple_indices()` | Runs FHLUS for several opportunity measures (e.g., income and poverty) at once, optionally by group. Returns long and wide tables. | `data`, `indices` (named list of specs, each can set `ascending = FALSE`), `group_var` |
 
 ### Preparing spatial data (requires `sf`)
@@ -92,7 +92,7 @@ Every function the package exports, grouped by task. The tables below list only 
 
 | Function | What it does | Key arguments |
 |---|---|---|
-| `fhlus_linked()` | The interactive plot next to a map of the same geographies, linked both ways: hover a segment to outline its neighborhood, hover a neighborhood to highlight its segment, click to pin. Map colors (rank, numerator, outlines) and basemaps (light, streets, aerial) switch in the page. | `result`, `geometry`, `id`, `tooltip_vars`, `fill_by`, `basemap` |
+| `fhlus_linked()` | The interactive plot next to a map of the same geographies, linked both ways: hover a segment to outline its neighborhood, hover a neighborhood to highlight its segment, click to pin. Map colors (rank, numerator, outlines) and basemaps (light, streets, aerial) switch in the page. Can also draw the site-level numerator (points or polygons) and neighborhoods left unscored for a missing rank value. | `result`, `geometry`, `id`, `tooltip_vars`, `numerator_layer`, `numerator_var`, `fill_by`, `basemap` |
 | `fhlus_linkedOutput()` / `renderFhlus_linked()` | Shiny output and render functions for `fhlus_linked()` (also need `shiny`). The hovered and pinned IDs arrive as `input$<id>_hover` and `input$<id>_selected`. | `outputId` |
 
 ### Exporting
@@ -100,7 +100,7 @@ Every function the package exports, grouped by task. The tables below list only 
 | Function | What it does | Key arguments |
 |---|---|---|
 | `export_fhlus()` | Writes a result, grouped result or data frame to CSV, Excel (with plot; needs `openxlsx`), JSON (needs `jsonlite`) or RDS. | `results`, `filename`, `format`, `include_plot` |
-| `fhlus_to_list()` | Converts a result to plain lists and data frames ready for `jsonlite::toJSON()` (used by the web app). | `result`, `id`, `tooltip_vars` |
+| `fhlus_to_list()` | Converts a result to plain lists and data frames ready for `jsonlite::toJSON()` (used by the web app). Currently `format_version` 2. | `result`, `id`, `tooltip_vars` |
 
 ### Print methods
 
@@ -121,8 +121,11 @@ Every argument of every exported function. "required" means there is no default.
 | `missing` | `NULL` | Margin of error in absolute numerator units. Adds lowest/highest scores by giving those units to the lowest- or highest-ranked areas. |
 | `missing_pct` | `NULL` | Margin of error as a share of the numerator total (0-1). Overrides `missing` if both are given. |
 | `graph` | `TRUE` | Draw the cumulative distribution plot. |
-| `exclude_area` | `NULL` | Column with area to subtract from the denominator (e.g., `excluded_area` from `prepare_spatial_fhlus()`). |
+| `exclude_area` | `NULL` | Column with area to subtract from the denominator (e.g., `excluded_area` from `prepare_spatial_fhlus()`). The score uses `denom - exclude_area` (floored at 0), stored in `result$data` as `<denom>_adjusted`; the `denom` column keeps its original values. |
 | `tie_breaker` | `NULL` | Column(s) used to order geographies with tied `rank_var` values. |
+| `rank_na` | `"auto"` | Rows with a missing rank value: `"auto"` drops those with no numerator and imputes those with numerator values (error if they can't be imputed), `"impute"` imputes all, `"drop"` drops all (warning about any numerator lost). See [Missing rank values](#missing-rank-values). |
+| `impute_method` | `"mean"` | Imputation method passed to `spatial_impute()`: `"mean"`, `"median"` or `"idw"`. |
+| `impute_k` | `5` | Number of nearest neighbors used for imputation. |
 | `boundary_label` | `"Tract Boundary"` | Legend label for the boundary points on the plot; `NULL` hides them. |
 | `plot_subtitle` | `NULL` | Custom plot subtitle (`grouped_fhlus()` uses it for the group name). |
 | `show_ci_bands` | `FALSE` | Draw the confidence interval as a ribbon (needs `missing` or `missing_pct`). |
@@ -145,6 +148,7 @@ Every argument of every exported function. "required" means there is no default.
 | `missing_pct` | `NULL` | A share (0-1) applied to every group, or the name of a column holding each group's margin of error as a share. |
 | `exclude_area` | `NULL` | As in `fhlus_score()`. |
 | `tie_breaker` | `NULL` | As in `fhlus_score()`. |
+| `rank_na`, `impute_method`, `impute_k` | `"auto"`, `"mean"`, `5` | As in `fhlus_score()`, applied within each group (imputation uses neighbors in the same group). A group that can't be scored gets an NA score with the reason in `error_reason`. |
 | `graph` | `FALSE` | Draw a plot per group. Plots are also stored in `attr(result, "plots")`. |
 | `graph_subset` | `NULL` | Group values to plot; `NULL` plots all (when `graph = TRUE`). |
 | `verbose` | `TRUE` | Print progress messages. |
@@ -311,15 +315,20 @@ Older wrapper around `assign_to_neighborhoods()`.
 | Argument | Default | Description |
 |---|---|---|
 | `result` | required | Result from `fhlus_score()`. If it was computed on sf data (e.g. from `prepare_spatial_fhlus()`), its geometry is used. |
-| `geometry` | `NULL` | sf polygons with the ID column, for results computed on plain data frames. Matched by ID; unmatched geographies are reported. |
+| `geometry` | `NULL` | sf polygons with the ID column, for results computed on plain data frames. Matched by ID; unmatched geographies are reported. Neighborhoods that `fhlus_score()` dropped for a missing rank value are drawn in grey as "not scored" when they have a polygon here. |
 | `id` | `NULL` | ID column; auto-detects `GEOID`/`geoid`/`GEOID20`/`GEOID10`. |
 | `tooltip_vars` | `NULL` | Extra columns for the pop-ups (named = display labels). |
+| `numerator_layer` | `NULL` | sf layer of the site-level numerator: only points or only polygons, any CRS. Points are drawn as circles, polygons as shapes, each linked to the geography containing it. Show/hide in the page. |
+| `numerator_var` | `NULL` | Numeric column of `numerator_layer` that sizes the points and appears in the pop-ups. Defaults to the result's numerator column if the layer has it; otherwise features are only counted. |
+| `numerator_tooltip_vars` | `NULL` | Extra columns of `numerator_layer` for the feature pop-ups (named = display labels). |
+| `numerator_label` | `NULL` | Name of the features in the toolbar, legend and pop-ups; defaults to `numerator_var` or "Features". |
 | `fill_by` | `"rank"` | Initial map coloring: `"rank"`, `"numerator"` or `"none"` (outlines). Switchable in the page. |
 | `basemap` | `"light"` | Initial basemap: `"light"`, `"streets"`, `"aerial"` or `"none"`. Switchable in the page. Esri tiles, no API key. |
 | `fill_opacity` | `0.7` | Initial polygon fill opacity (0-1); there is also a slider in the page. |
 | `layout` | `"side"` | `"side"` (plot left, map right) or `"stacked"`. Narrow containers always stack. |
 | `simplify` | `NULL` | Simplification tolerance in meters. `NULL` simplifies only inputs over 100,000 vertices; `FALSE` never simplifies. |
 | `max_features` | `5000` | Stop with an error above this many geographies. |
+| `max_numerator_features` | `50000` | Stop with an error above this many `numerator_layer` features. |
 | `width`, `height` | `NULL` | Widget size; `NULL` fills the container. |
 | `elementId` | `NULL` | Optional element ID. |
 | `...` | | Passed to `fhlus_interactive()` for the plot panel (e.g. `title`, `show_ci_bands`, `color_var`). |
@@ -518,7 +527,7 @@ The pop-up has four sections:
 | Section | Contents |
 |---|---|
 | Header | Geography ID, and its rank (1 = lowest opportunity) |
-| Values | Rank variable(s); numerator and denominator with each one's share of the total; excluded area (if `exclude_area` was used); concentration |
+| Values | Rank variable(s), marked "imputed" when a missing value was filled; numerator and denominator with each one's share of the total; with `exclude_area`, the total, the excluded area (and its share of the total) and the available area the score uses; concentration |
 | Cumulative | Where the segment starts and ends on each axis; the CI range (if `missing`/`missing_pct` was used) |
 | Extra variables | Each column in `tooltip_vars` |
 
@@ -597,7 +606,24 @@ fhlus_save_html(w, "fhlus_linked.html")
 
 # Scored a plain data frame? Pass the polygons separately, matched by ID
 fhlus_linked(result, geometry = tract_sf, id = "GEOID")
+
+# Draw the sites the numerator was built from (points or parcel polygons)
+fhlus_linked(result, numerator_layer = projects_sf, numerator_var = "units",
+             numerator_tooltip_vars = c("Project" = "name"))
 ```
+
+With `numerator_layer`, the map also shows the site-level data behind the
+numerator: points as circles sized by `numerator_var`, or polygons (e.g.
+parcels) as shapes. Each feature is linked to the geography that contains it,
+so hovering a feature highlights its geography and curve segment, clicking it
+pins them, and hovering a geography outlines its features. The geography
+pop-ups add the feature count and total, and the layer can be hidden from the
+toolbar. Features outside every geography are drawn in grey.
+
+When polygons come from `geometry =`, neighborhoods that `fhlus_score()`
+dropped for a missing rank value (see
+[Missing rank values](#missing-rank-values)) are drawn in grey with a dashed
+outline and a "Not scored" pop-up, instead of leaving a gap in the map.
 
 ![Linked FHLUS curve and map with a county hovered](man/figures/linked-map.png)
 
@@ -678,7 +704,7 @@ fhlus_segments(result, tooltip_vars = "median_rent")
 | `share_denom`, `share_var` | The geography's own share of the denominator/numerator |
 | `concentration` | `share_var / share_denom` (the segment's slope); `NA` if the denominator is 0 |
 | `cum_var_lowest`, `cum_var_highest` | Cumulative numerator share under the two CI scenarios (only with `missing`/`missing_pct`) |
-| *(raw columns)* | Rank variable(s), numerator, denominator, excluded area, tie breakers, `tooltip_vars` |
+| *(raw columns)* | Rank variable(s), numerator, denominator (and `<denom>_adjusted` with `exclude_area`), excluded area, tie breakers, `.rank_imputed`, `tooltip_vars` |
 
 Use it for your own tables or charts, or to join FHLUS results to a map
 (`dplyr::left_join(tracts_sf, segs, by = c("GEOID" = "id"))`).
@@ -750,6 +776,41 @@ Minimum requirements:
 - At least 2 observations
 - Numeric columns for numerator, rank_var, and denominator
 - No all-NA columns
+
+Rows with a missing or infinite numerator or denominator are dropped, as are
+rows with a zero denominator.
+
+### Missing rank values
+
+A neighborhood without a rank value can't be placed on the curve. Dropping it
+is harmless when it has no units (an airport, a water tract), but dropping a
+neighborhood that contains units removes them from the score and biases it.
+`fhlus_score()` therefore treats the two cases differently, controlled by
+`rank_na`:
+
+| Row | `"auto"` (default) | `"impute"` | `"drop"` |
+|---|---|---|---|
+| Rank missing, numerator 0 | Dropped, with a message | Imputed | Dropped, with a message |
+| Rank missing, numerator > 0, can be imputed | Imputed | Imputed | Dropped, with a warning naming the rows and the units lost |
+| Rank missing, numerator > 0, can't be imputed | Error | Error | Dropped, with the same warning |
+
+Imputation uses `spatial_impute()` (`impute_method`, `impute_k`) and happens
+before ranking, so imputed rows are ranked with the rest. It needs sf data
+(e.g. the output of `prepare_spatial_fhlus()`) and the `spdep` package, and a
+row whose nearest neighbors all lack a value can't be imputed. Neighbors are
+the rows passed to `fhlus_score()`, so after clipping to a boundary, tracts on
+the edge only use neighbors inside it.
+
+```r
+result <- fhlus_score(tracts, numerator = "units", rank_var = "med_incE",
+                      denom = "total_area", exclude_area = "excluded_area")
+result$meta$rank_na$dropped   # id, rank_var, numerator_value, denom_value
+result$meta$rank_na$imputed   # id, rank_var, imputed_value, method, k
+result$data$.rank_imputed     # TRUE for imputed rows
+```
+
+Imputed values are marked in the interactive pop-ups, and `grouped_fhlus()`
+reports `n_rank_imputed` and `n_rank_dropped` per group.
 
 ## Spatial Data Support
 
@@ -881,6 +942,17 @@ result <- fhlus_score(
   numerator = "housing_units",
   rank_var = "median_income",
   denom = "available_area"  # Created by prepare_spatial_fhlus
+)
+
+# Equivalent: subtract the exclusion inside fhlus_score(). result$data keeps
+# total_area as is and adds total_area_adjusted (what the score uses); the
+# pop-ups show the total, excluded and available area.
+result <- fhlus_score(
+  df = tracts_prepared,
+  numerator = "housing_units",
+  rank_var = "median_income",
+  denom = "total_area",
+  exclude_area = "excluded_area"
 )
 ```
 
