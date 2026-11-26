@@ -25,7 +25,12 @@ prepare_spatial_fhlus(
 \item{spatial_data}{SF object with the neighborhood polygons (e.g., tracts)
 and their attributes (rank variables etc.)}
 
-\item{area_crs}{CRS for area calculations (default: use existing CRS, but warn if geographic)}
+\item{area_crs}{Projected CRS for area calculations and the spatial steps.
+If \code{NULL} (default), a projected \code{spatial_data} keeps its CRS;
+lat/lon data are transformed to the local UTM zone (centred on
+\code{boundary} if given, otherwise on \code{spatial_data}), with a
+message. Areas are then in square meters. Pass a local CRS (e.g. a State
+Plane zone) to control the units and projection.}
 
 \item{exclude_zones}{Vector of zone types to exclude (e.g., "Open space")}
 
