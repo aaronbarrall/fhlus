@@ -234,9 +234,28 @@ fhlus_linked(result, geometry = tracts_sf, id = "GEOID")
 
 Geographies without a polygon still appear on the curve and are counted in a
 note on the map. Extra polygons that aren't in the result are left off.
+Neighborhoods that `fhlus_score()` dropped because their rank value was
+missing (`rank_na`) are drawn in grey as "not scored" when `geometry` has a
+polygon for them.
+
+If the numerator was built from site-level data, such as housing projects as
+points or parcels as polygons, pass that layer as `numerator_layer` to draw it
+on the map:
+
+```{r linked-sites, eval = FALSE}
+fhlus_linked(result, numerator_layer = projects_sf, numerator_var = "units",
+             numerator_tooltip_vars = c("Project" = "name"))
+```
+
+Points are sized by `numerator_var`. Each feature is linked to the geography
+that contains it: hovering a feature highlights its geography and curve
+segment, clicking pins them, and hovering a geography outlines its features.
+The layer can be shown or hidden from the toolbar.
 
 | Argument | Purpose |
 |---|---|
+| `numerator_layer` | sf points or polygons of the site-level numerator, drawn on the map |
+| `numerator_var`, `numerator_tooltip_vars`, `numerator_label` | Value column (point size), extra pop-up columns and display name for `numerator_layer` |
 | `fill_by` | Initial map coloring: `"rank"` (default), `"numerator"` or `"none"` |
 | `basemap` | Initial basemap: `"light"` (default), `"streets"`, `"aerial"` or `"none"` |
 | `fill_opacity` | Initial fill opacity (0-1) |
@@ -296,7 +315,7 @@ segs
 | `share_denom`, `share_var` | The geography's own share of the denominator/numerator |
 | `concentration` | `share_var / share_denom`; `NA` if the denominator share is 0 |
 | `cum_var_lowest`, `cum_var_highest` | Cumulative share under the two CI scenarios (only with `missing`/`missing_pct`) |
-| raw columns | Rank variable(s), numerator, denominator, excluded area, tie breakers, `tooltip_vars` |
+| raw columns | Rank variable(s), numerator, denominator (and `<denom>_adjusted` with `exclude_area`), excluded area, tie breakers, `.rank_imputed`, `tooltip_vars` |
 
 For example, to list the tracts most over- or under-represented relative to
 their land area:
