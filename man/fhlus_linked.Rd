@@ -31,7 +31,9 @@ fhlus_linked(
 
 \item{geometry}{Optional sf object with polygon geometry and the ID column.
 If NULL, the geometry of \code{result$data} is used (the result must then
-come from sf data).}
+come from sf data). Neighborhoods that \code{fhlus_score()} dropped for a
+missing rank value (\code{result$meta$rank_na$dropped}) and that have a
+polygon here are drawn in grey as "not scored".}
 
 \item{id}{Column name identifying each geography (e.g. "GEOID"). If NULL,
 the first of "GEOID", "geoid", "GEOID20", "GEOID10" found in the data is

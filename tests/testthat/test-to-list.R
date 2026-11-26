@@ -17,7 +17,7 @@ test_that("fhlus_to_list returns scores, meta and one segment per geography", {
   result <- fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE)
   x <- fhlus_to_list(result, tooltip_vars = c("Median rent" = "rent"))
 
-  expect_equal(x$format_version, 1L)
+  expect_equal(x$format_version, 2L)
   expect_equal(x$score, result$scores$score[1])
   expect_equal(x$auc, result$auc)
   expect_null(x$confidence_interval)

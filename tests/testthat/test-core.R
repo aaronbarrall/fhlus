@@ -96,6 +96,7 @@ test_that("fhlus_score rejects all-NA denominator", {
 
 test_that("fhlus_score warns about NA values when verbose=TRUE", {
   df <- create_edge_case_data("some_na")
+  df$income[is.na(df$income)] <- 50000
   expect_warning(
     fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = TRUE),
     "NA values found"
@@ -104,6 +105,8 @@ test_that("fhlus_score warns about NA values when verbose=TRUE", {
 
 test_that("fhlus_score does not warn about NA values when verbose=FALSE", {
   df <- create_edge_case_data("some_na")
+  # Missing rank values in rows without units are dropped quietly
+  df$units[is.na(df$income)] <- 0
   expect_silent(
     fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE)
   )
@@ -339,6 +342,7 @@ test_that("fhlus_score handles perfect proportional distribution", {
 
 test_that("fhlus_score handles some NA values in numerator", {
   df <- create_edge_case_data("some_na")
+  df$income[is.na(df$income)] <- 50000
   result <- fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE)
   expect_s3_class(result, "fhlus")
   expect_true(is_valid_fhlus_score(result$scores$score[1]))
@@ -346,12 +350,21 @@ test_that("fhlus_score handles some NA values in numerator", {
 
 test_that("fhlus_score handles some NA values in rank_var", {
   df <- create_edge_case_data("some_na")
-  result <- fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE)
+  # Plain data frame: rows with units can't be imputed, so they must be
+  # dropped explicitly
+  expect_error(fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE),
+               "cannot be imputed")
+  expect_warning(
+    result <- fhlus_score(df, "units", "income", "area", graph = FALSE,
+                          verbose = FALSE, rank_na = "drop"),
+    "biases the FHLUS"
+  )
   expect_s3_class(result, "fhlus")
 })
 
 test_that("fhlus_score handles some NA values in denominator", {
   df <- create_edge_case_data("some_na")
+  df$income[is.na(df$income)] <- 50000
   result <- fhlus_score(df, "units", "income", "area", graph = FALSE, verbose = FALSE)
   expect_s3_class(result, "fhlus")
 })

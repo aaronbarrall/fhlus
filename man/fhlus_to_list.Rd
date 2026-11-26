@@ -37,7 +37,9 @@ in \code{result$meta}.}
 }
 \value{
 A list with elements:
-\item{format_version}{Integer version of this structure (currently 1)}
+\item{format_version}{Integer version of this structure (currently 2;
+version 2 adds \code{meta$denom_used} and \code{meta$rank_na}, and keeps
+the original denominator values alongside \code{<denom>_adjusted})}
 \item{score}{The base FHLUS score}
 \item{auc}{Area under the curve}
 \item{scores}{Data frame with \code{type}, \code{score},

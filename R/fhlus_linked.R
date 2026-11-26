@@ -45,7 +45,9 @@
 #' @inheritParams fhlus_segments
 #' @param geometry Optional sf object with polygon geometry and the ID column.
 #'   If NULL, the geometry of \code{result$data} is used (the result must then
-#'   come from sf data).
+#'   come from sf data). Neighborhoods that \code{fhlus_score()} dropped for a
+#'   missing rank value (\code{result$meta$rank_na$dropped}) and that have a
+#'   polygon here are drawn in grey as "not scored".
 #' @param numerator_layer Optional sf layer of numerator features: only points
 #'   (POINT/MULTIPOINT) or only polygons (POLYGON/MULTIPOLYGON), in any CRS.
 #' @param numerator_var Numeric column of \code{numerator_layer} with each
@@ -138,6 +140,8 @@ fhlus_linked <- function(result,
   geom <- linked_geometry(result, seg, geometry, id)
   geom <- clean_linked_geometry(geom, simplify)
 
+  unscored <- if (!is.null(geometry)) linked_unscored(geometry, seg, meta, id, simplify) else NULL
+
   sites <- NULL
   tips <- build_tooltips(seg)
   if (!is.null(numerator_layer)) {
@@ -201,7 +205,8 @@ fhlus_linked <- function(result,
     layout = layout,
     color_var = grDevices::rgb(t(grDevices::col2rgb(color_var)), maxColorValue = 255),
     n_unmapped = sum(!geom$mapped),
-    sites = sites
+    sites = sites,
+    unscored = unscored
   )
 
   w <- htmlwidgets::createWidget(
@@ -432,6 +437,41 @@ sf_to_geojson <- function(out) {
                layer_options = c("COORDINATE_PRECISION=6", "RFC7946=YES"))
   # Class "json" makes htmlwidgets embed it verbatim instead of as a string
   structure(paste(readLines(tmp, warn = FALSE), collapse = ""), class = "json")
+}
+
+#' Dropped (not scored) neighborhoods that have a polygon in `geometry`
+#'
+#' Returns NULL, or list(geojson, tips, n) with features carrying `u` (their
+#' index in `tips`).
+#' @noRd
+linked_unscored <- function(geometry, seg, meta, id, simplify) {
+  dropped <- meta$rank_na$dropped
+  if (is.null(dropped) || nrow(dropped) == 0) return(NULL)
+  key <- if (!is.null(id)) id else attr(seg, "id_col")
+  if (is.null(key) || !key %in% names(geometry)) return(NULL)
+  m <- match(as.character(dropped$id), as.character(geometry[[key]]))
+  keep <- which(!is.na(m))
+  if (length(keep) == 0) return(NULL)
+  dropped <- dropped[keep, , drop = FALSE]
+
+  g <- sf::st_transform(sf::st_geometry(geometry)[m[keep]], 4326)
+  g <- sf::st_make_valid(g)
+  g <- suppressWarnings(sf::st_collection_extract(g, "POLYGON"))
+  g <- simplify_polygons(sf::st_cast(g, "MULTIPOLYGON"), simplify)
+  ok <- !sf::st_is_empty(g)
+  if (!any(ok)) return(NULL)
+
+  tips <- tt_compose(list(
+    list(tt_title(key, dropped$id),
+         tt_muted(paste0("Not scored: ", html_escape(dropped$rank_var), " is missing"))),
+    list(tt_row(meta$numerator, fmt_value(dropped$numerator_value)),
+         tt_row(meta$denom, fmt_value(dropped$denom_value)))
+  ))
+  list(
+    geojson = sf_to_geojson(sf::st_sf(u = which(ok) - 1L, geometry = g[ok])),
+    tips = I(tips),
+    n = sum(ok)
+  )
 }
 
 # ---- Internal helpers: numerator features --------------------------------

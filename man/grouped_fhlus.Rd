@@ -14,6 +14,9 @@ grouped_fhlus(
   missing_pct = NULL,
   exclude_area = NULL,
   tie_breaker = NULL,
+  rank_na = c("auto", "drop", "impute"),
+  impute_method = c("mean", "median", "idw"),
+  impute_k = 5,
   graph = FALSE,
   graph_subset = NULL,
   verbose = TRUE,
@@ -41,6 +44,12 @@ or a column name (string) in \code{df} containing per-group error percentages.}
 
 \item{tie_breaker}{Vector of column names for tie breaking}
 
+\item{rank_na, impute_method, impute_k}{How rows with a missing rank value
+are handled in each group; see \code{\link{fhlus_score}()}. Imputation
+uses neighbors within the same group. A group whose missing rank values
+can't be dropped or imputed gets an NA score with the reason in
+\code{error_reason}.}
+
 \item{graph}{Logical, whether to create graphs. When TRUE, plots are printed and
 also stored as a named list in the \code{"plots"} attribute of the result.
 Access via \code{attr(result, "plots")} or \code{result_plots <- attr(result, "plots")}.}
@@ -54,7 +63,9 @@ Access via \code{attr(result, "plots")} or \code{result_plots <- attr(result, "p
 \value{
 Data frame of class "grouped_fhlus" with one row per group in wide format.
 Columns include \code{score}, \code{score_lowest}, \code{score_highest},
-\code{percent_error}, and \code{error_reason}. When \code{graph=TRUE}, plot objects
+\code{percent_error}, \code{error_reason}, and \code{n_rank_imputed} /
+\code{n_rank_dropped} (rows whose missing rank value was imputed or
+dropped). When \code{graph=TRUE}, plot objects
 are stored in \code{attr(result, "plots")} as a named list keyed by group value.
 }
 \description{

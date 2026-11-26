@@ -18,7 +18,30 @@
 #' @param missing Numeric value for margin of error (absolute units) or NULL
 #' @param missing_pct Percentage for margin of error (0-1) or NULL. Overrides missing if both provided.
 #' @param graph Logical, whether to produce a visualization
-#' @param exclude_area Column name for areas to exclude (e.g., open space) or NULL
+#' @param exclude_area Column name for areas to exclude (e.g., open space) or
+#'   NULL. The score then uses \code{denom - exclude_area} (floored at 0), stored
+#'   in \code{result$data} as \code{<denom>_adjusted}; the \code{denom} column
+#'   keeps its original values.
+#' @param rank_na How to handle rows where a rank variable is \code{NA}:
+#'   \describe{
+#'     \item{\code{"auto"}}{(default) rows with no numerator (0) are dropped
+#'       with a message; rows with numerator values are imputed from their
+#'       spatial neighbors (see \code{\link{spatial_impute}()}), since dropping
+#'       them would remove units and bias the score. If they can't be imputed
+#'       (no geometry, \pkg{spdep} not installed, or no neighbor with a value),
+#'       \code{fhlus_score()} stops with an error naming them.}
+#'     \item{\code{"impute"}}{impute every row with a missing rank value. Rows
+#'       with numerator values that can't be imputed are an error; rows without
+#'       are dropped.}
+#'     \item{\code{"drop"}}{drop every such row. Dropping rows with numerator
+#'       values gives a warning listing them and the numerator lost.}
+#'   }
+#'   Imputed rows are ranked with the rest and flagged in
+#'   \code{result$data$.rank_imputed}; \code{result$meta$rank_na} records the
+#'   dropped and imputed rows.
+#' @param impute_method,impute_k Imputation method (\code{"mean"},
+#'   \code{"median"} or \code{"idw"}) and number of nearest neighbors, passed
+#'   to \code{spatial_impute()}.
 #' @param tie_breaker Vector of column names to use as tie breakers in ranking
 #' @param boundary_label Label for boundary points on plot, or NULL to hide them
 #' @param plot_subtitle Custom subtitle for the plot, or NULL for default. Used by
@@ -44,8 +67,13 @@
 #'   \item{data_lowest}{Data frame with CI lowest-bound cumulative distributions, or NULL}
 #'   \item{data_highest}{Data frame with CI highest-bound cumulative distributions, or NULL}
 #'   \item{meta}{List of the column names and settings used (numerator, denom,
-#'     rank_var, tie_breaker, exclude_area, missing). Used by
-#'     \code{fhlus_segments()} and \code{fhlus_interactive()}.}
+#'     denom_used, rank_var, tie_breaker, exclude_area, missing, rank_na). Used
+#'     by \code{fhlus_segments()} and \code{fhlus_interactive()}.
+#'     \code{denom_used} is the column the score was computed from
+#'     (\code{<denom>_adjusted} with \code{exclude_area}, otherwise
+#'     \code{denom}). \code{rank_na} is a list of two data frames:
+#'     \code{dropped} (id, rank_var, numerator_value, denom_value) and
+#'     \code{imputed} (id, rank_var, imputed_value, method, k).}
 #'
 #' @examples
 #' # Create sample data
@@ -91,6 +119,9 @@ fhlus_score <- function(df,
                         graph = TRUE,
                         exclude_area = NULL,
                         tie_breaker = NULL,
+                        rank_na = c("auto", "drop", "impute"),
+                        impute_method = c("mean", "median", "idw"),
+                        impute_k = 5,
                         boundary_label = "Tract Boundary",
                         plot_subtitle = NULL,
                         show_ci_bands = FALSE,
@@ -100,15 +131,30 @@ fhlus_score <- function(df,
                         annotation_y = 0.93,
                         verbose = TRUE) {
 
+  rank_na <- match.arg(rank_na)
+  impute_method <- match.arg(impute_method)
+
   # Input validation
   validate_inputs(df, numerator, rank_var, denom, verbose, tie_breaker)
 
-  # Drop rows with NA or non-finite values in the required columns
-  df <- drop_incomplete_rows(df, numerator, rank_var, denom)
+  # Drop rows with NA or non-finite numerator/denominator values
+  df <- drop_incomplete_rows(df, numerator, denom)
 
-  # Adjust denominator for excluded areas if specified
+  # Rows with a missing rank value: drop, impute or stop (before ranking, so
+  # imputed rows are ranked with the rest)
+  rank_na_out <- handle_missing_rank(df, numerator, rank_var, denom, rank_na,
+                                     impute_method, impute_k, verbose)
+  df <- rank_na_out$df
+  if (nrow(df) < 2) {
+    stop("Fewer than 2 rows remain after removing rows with missing values. Cannot compute FHLUS.")
+  }
+
+  # Adjust denominator for excluded areas if specified. The original column
+  # is kept; the score uses <denom>_adjusted.
+  denom_used <- denom
   if (!is.null(exclude_area) && exclude_area %in% names(df)) {
     df <- adjust_for_excluded_area(df, denom, exclude_area, verbose)
+    denom_used <- paste0(denom, "_adjusted")
   }
 
   # Handle ranking with potential ties
@@ -124,12 +170,12 @@ fhlus_score <- function(df,
   }
 
   # Calculate base score
-  base_result <- compute_score(df, numerator, "rank", denom)
+  base_result <- compute_score(df, numerator, "rank", denom_used)
 
   # Calculate confidence intervals if missing data specified
   ci_results <- NULL
   if (!is.null(missing) && missing > 0) {
-    ci_results <- calculate_confidence_intervals(df, numerator, denom, missing, base_result)
+    ci_results <- calculate_confidence_intervals(df, numerator, denom_used, missing, base_result)
   }
 
   # With no variation in the rank variable(s), the row order is arbitrary and
@@ -161,10 +207,12 @@ fhlus_score <- function(df,
   results$meta <- list(
     numerator = numerator,
     denom = denom,
+    denom_used = denom_used,
     rank_var = rank_var,
     tie_breaker = tie_breaker,
     exclude_area = if (!is.null(exclude_area) && exclude_area %in% names(df)) exclude_area else NULL,
-    missing = missing
+    missing = missing,
+    rank_na = rank_na_out$log
   )
 
   return(results)
@@ -266,7 +314,8 @@ validate_inputs <- function(df, numerator, rank_var, denom, verbose,
 
   # Check for NA and infinite values (warnings only)
   if (verbose) {
-    na_counts <- vapply(unique(c(numerator, rank_cols, denom)), function(col) sum(is.na(df[[col]])), numeric(1))
+    # Missing rank values are reported by handle_missing_rank()
+    na_counts <- vapply(unique(c(numerator, denom)), function(col) sum(is.na(df[[col]])), numeric(1))
     if (any(na_counts > 0)) {
       warning(sprintf(
         "NA values found in: %s. These rows will be excluded from calculations.",
@@ -292,14 +341,10 @@ validate_inputs <- function(df, numerator, rank_var, denom, verbose,
   }
 }
 
-#' Drop rows with NA or non-finite required values
+#' Drop rows with NA or non-finite numerator or denominator values
 #' @noRd
-drop_incomplete_rows <- function(df, numerator, rank_var, denom) {
+drop_incomplete_rows <- function(df, numerator, denom) {
   keep <- is.finite(df[[numerator]]) & is.finite(df[[denom]])
-  for (col in rank_var) {
-    keep <- keep & !is.na(df[[col]])
-  }
-
   df <- df[keep, , drop = FALSE]
 
   if (nrow(df) < 2) {
@@ -307,6 +352,141 @@ drop_incomplete_rows <- function(df, numerator, rank_var, denom) {
   }
 
   return(df)
+}
+
+#' Drop, impute or refuse rows with missing rank values
+#'
+#' Returns list(df, log): `df` without the dropped rows, with imputed values
+#' filled in and a `.rank_imputed` flag; `log` is list(dropped, imputed).
+#' See the `rank_na` argument of fhlus_score() for the rules.
+#' @noRd
+handle_missing_rank <- function(df, numerator, rank_var, denom, rank_na,
+                                method, k, verbose) {
+  id_col <- resolve_id_col(df, NULL)
+  ids <- if (is.null(id_col)) as.character(seq_len(nrow(df))) else as.character(df[[id_col]])
+  id_text <- function(idx) {
+    shown <- utils::head(ids[idx], 5)
+    more <- if (length(idx) > 5) sprintf(", and %d more", length(idx) - 5) else ""
+    paste0(if (is.null(id_col)) "rows" else paste0(id_col, "s"), ": ",
+           paste(shown, collapse = ", "), more)
+  }
+  num_text <- function(idx) {
+    paste(fmt_value(sum(df[[numerator]][idx])), numerator)
+  }
+
+  df$.rank_imputed <- FALSE
+  log <- list(
+    dropped = data.frame(id = character(0), rank_var = character(0),
+                         numerator_value = numeric(0), denom_value = numeric(0),
+                         stringsAsFactors = FALSE),
+    imputed = data.frame(id = character(0), rank_var = character(0),
+                         imputed_value = numeric(0), method = character(0),
+                         k = integer(0), stringsAsFactors = FALSE)
+  )
+  is_na <- function(d) Reduce(`|`, lapply(rank_var, function(v) is.na(d[[v]])))
+  na_rows <- is_na(df)
+  if (!any(na_rows)) return(list(df = df, log = log))
+
+  has_num <- df[[numerator]] > 0
+  want <- switch(rank_na,
+                 auto = na_rows & has_num,
+                 impute = na_rows,
+                 drop = rep(FALSE, nrow(df)))
+
+  # Impute, one rank variable at a time, using only rows that have a value or
+  # are being imputed as the neighbor pool
+  reason <- NULL
+  if (any(want)) {
+    reason <- impute_unavailable_reason(df)
+    if (is.null(reason)) {
+      for (v in rank_var) {
+        rows <- which(want & is.na(df[[v]]))
+        if (length(rows) == 0) next
+        pool <- which(!is.na(df[[v]]) | want)
+        filled <- tryCatch(
+          suppressWarnings(suppressMessages(
+            spatial_impute(df[pool, ], v, method = method, k = min(k, length(pool) - 1))
+          ))[[v]],
+          error = function(e) {
+            reason <<- paste0("spatial imputation failed (", conditionMessage(e), ")")
+            NULL
+          })
+        if (is.null(filled)) break
+        new <- filled[match(rows, pool)]
+        ok <- !is.na(new)
+        df[[v]][rows[ok]] <- new[ok]
+        df$.rank_imputed[rows[ok]] <- TRUE
+        log$imputed <- rbind(log$imputed, data.frame(
+          id = ids[rows[ok]], rank_var = rep(v, sum(ok)), imputed_value = new[ok],
+          method = rep(method, sum(ok)), k = rep(as.integer(k), sum(ok)),
+          stringsAsFactors = FALSE))
+      }
+    }
+  }
+
+  still_na <- is_na(df)
+  failed <- which(want & still_na & has_num)
+  if (length(failed) > 0) {
+    if (is.null(reason)) reason <- "they have no neighbors with a value"
+    stop(sprintf(paste0(
+      "rank_var %s is missing for %d neighborhood(s) that contain numerator values ",
+      "(%s; %s). These cannot be dropped without biasing the FHLUS, and cannot be ",
+      "imputed because %s. Fill these values before scoring, pass spatial (sf) data ",
+      "so they can be imputed, or set rank_na = \"drop\" to drop them anyway."),
+      paste0("'", rank_var, "'", collapse = "/"), length(failed), id_text(failed),
+      num_text(failed), reason), call. = FALSE)
+  }
+
+  drop <- which(still_na)
+  if (length(drop) > 0) {
+    missing_vars <- vapply(drop, function(i) {
+      paste(rank_var[vapply(rank_var, function(v) is.na(df[[v]][i]), logical(1))],
+            collapse = ", ")
+    }, character(1))
+    log$dropped <- data.frame(id = ids[drop], rank_var = missing_vars,
+                              numerator_value = df[[numerator]][drop],
+                              denom_value = df[[denom]][drop],
+                              stringsAsFactors = FALSE)
+    lost <- drop[df[[numerator]][drop] > 0]
+    if (length(lost) > 0) {
+      # Always warn: this changes the score
+      warning(sprintf(paste0(
+        "Dropped %d neighborhood(s) with missing %s that contain numerator values ",
+        "(%s; %s lost). This biases the FHLUS; use rank_na = \"auto\" to impute them instead."),
+        length(lost), paste(rank_var, collapse = "/"), id_text(lost), num_text(lost)),
+        call. = FALSE)
+    }
+    quiet <- setdiff(drop, lost)
+    if (length(quiet) > 0 && verbose) {
+      message(sprintf(
+        "Dropped %d neighborhood(s) with missing %s and no %s (%s).",
+        length(quiet), paste(rank_var, collapse = "/"), numerator, id_text(quiet)))
+    }
+  }
+  if (verbose && nrow(log$imputed) > 0) {
+    imp <- which(df$.rank_imputed)
+    message(sprintf(
+      "Imputed missing %s for %d neighborhood(s) from their %d nearest neighbors (%s; %s).",
+      paste(unique(log$imputed$rank_var), collapse = "/"), length(imp), as.integer(k),
+      method, id_text(imp)))
+  }
+
+  # Only keep imputation records for rows that are scored
+  if (length(drop) > 0) {
+    log$imputed <- log$imputed[!log$imputed$id %in% ids[drop], , drop = FALSE]
+    df <- df[-drop, , drop = FALSE]
+  }
+  rownames(log$imputed) <- NULL
+  list(df = df, log = log)
+}
+
+#' Why rank values can't be imputed, or NULL if they can
+#' @noRd
+impute_unavailable_reason <- function(df) {
+  if (!inherits(df, "sf")) return("the data has no geometry (it is not an sf object)")
+  if (!requireNamespace("sf", quietly = TRUE)) return("the sf package is not installed")
+  if (!requireNamespace("spdep", quietly = TRUE)) return("the spdep package is not installed")
+  NULL
 }
 
 #' Adjust denominator for excluded areas
@@ -326,9 +506,6 @@ adjust_for_excluded_area <- function(df, denom, exclude_area, verbose) {
     }
     df[[paste0(denom, "_adjusted")]][df[[paste0(denom, "_adjusted")]] < 0] <- 0
   }
-
-  # Use adjusted denominator
-  df[[denom]] <- df[[paste0(denom, "_adjusted")]]
 
   return(df)
 }

@@ -19,6 +19,11 @@
 #'   or a column name (string) in \code{df} containing per-group error percentages.
 #' @param exclude_area Column name for areas to exclude
 #' @param tie_breaker Vector of column names for tie breaking
+#' @param rank_na,impute_method,impute_k How rows with a missing rank value
+#'   are handled in each group; see \code{\link{fhlus_score}()}. Imputation
+#'   uses neighbors within the same group. A group whose missing rank values
+#'   can't be dropped or imputed gets an NA score with the reason in
+#'   \code{error_reason}.
 #' @param graph Logical, whether to create graphs. When TRUE, plots are printed and
 #'   also stored as a named list in the \code{"plots"} attribute of the result.
 #'   Access via \code{attr(result, "plots")} or \code{result_plots <- attr(result, "plots")}.
@@ -28,7 +33,9 @@
 #'
 #' @return Data frame of class "grouped_fhlus" with one row per group in wide format.
 #'   Columns include \code{score}, \code{score_lowest}, \code{score_highest},
-#'   \code{percent_error}, and \code{error_reason}. When \code{graph=TRUE}, plot objects
+#'   \code{percent_error}, \code{error_reason}, and \code{n_rank_imputed} /
+#'   \code{n_rank_dropped} (rows whose missing rank value was imputed or
+#'   dropped). When \code{graph=TRUE}, plot objects
 #'   are stored in \code{attr(result, "plots")} as a named list keyed by group value.
 #'
 #' @examples
@@ -64,6 +71,9 @@ grouped_fhlus <- function(df,
                           missing_pct = NULL,
                           exclude_area = NULL,
                           tie_breaker = NULL,
+                          rank_na = c("auto", "drop", "impute"),
+                          impute_method = c("mean", "median", "idw"),
+                          impute_k = 5,
                           graph = FALSE,
                           graph_subset = NULL,
                           verbose = TRUE,
@@ -90,6 +100,10 @@ grouped_fhlus <- function(df,
     message(paste("Processing", length(groups), "groups"))
   }
 
+  rank_na_args <- list(rank_na = match.arg(rank_na),
+                       impute_method = match.arg(impute_method),
+                       impute_k = impute_k)
+
   # Prepare missing data handling
   missing_values <- prepare_missing_by_group(df, group_var, missing, missing_pct)
 
@@ -98,7 +112,7 @@ grouped_fhlus <- function(df,
     processed <- process_groups_parallel(df, groups, group_var, numerator,
                                          rank_var, denom, missing_values,
                                          exclude_area, tie_breaker, graph,
-                                         graph_subset, verbose)
+                                         graph_subset, verbose, rank_na_args)
   } else {
     if (parallel && verbose) {
       message("Package 'furrr' not available. Using sequential processing.")
@@ -106,7 +120,7 @@ grouped_fhlus <- function(df,
     processed <- process_groups_sequential(df, groups, group_var, numerator,
                                            rank_var, denom, missing_values,
                                            exclude_area, tie_breaker, graph,
-                                           graph_subset, verbose)
+                                           graph_subset, verbose, rank_na_args)
   }
 
   # Combine score results (long format from fhlus_score)
@@ -191,7 +205,7 @@ process_single_group_internal <- function(group_data, g, group_var,
                                           numerator, rank_var, denom,
                                           missing_value, missing_pct_value,
                                           exclude_area, tie_breaker,
-                                          should_graph) {
+                                          should_graph, rank_na_args = list()) {
 
   # Validation: Check minimum rows
   if (nrow(group_data) < 2) {
@@ -224,7 +238,7 @@ process_single_group_internal <- function(group_data, g, group_var,
 
   # Calculate FHLUS
   tryCatch({
-    fhlus_result <- fhlus_score(
+    fhlus_result <- do.call(fhlus_score, c(list(
       df = group_data,
       numerator = numerator,
       rank_var = rank_var,
@@ -236,11 +250,14 @@ process_single_group_internal <- function(group_data, g, group_var,
       tie_breaker = tie_breaker,
       plot_subtitle = as.character(g),
       verbose = FALSE
-    )
+    ), rank_na_args))
 
     # Return scores with group identifier, and the plot object
+    rn <- fhlus_result$meta$rank_na
     scores <- fhlus_result$scores %>%
-      dplyr::mutate(!!rlang::sym(group_var) := g, error_reason = NA_character_)
+      dplyr::mutate(!!rlang::sym(group_var) := g, error_reason = NA_character_,
+                    n_rank_imputed = length(unique(rn$imputed$id)),
+                    n_rank_dropped = nrow(rn$dropped))
 
     list(scores = scores, plot = fhlus_result$plot)
 
@@ -263,7 +280,7 @@ process_single_group_internal <- function(group_data, g, group_var,
 process_groups_sequential <- function(df, groups, group_var, numerator,
                                       rank_var, denom, missing_values,
                                       exclude_area, tie_breaker, graph,
-                                      graph_subset, verbose) {
+                                      graph_subset, verbose, rank_na_args = list()) {
 
   score_results <- list()
   plot_results <- list()
@@ -297,7 +314,8 @@ process_groups_sequential <- function(df, groups, group_var, numerator,
     # Process this group using the internal helper
     group_result <- process_single_group_internal(
       group_data, g, group_var, numerator, rank_var, denom,
-      group_missing, group_missing_pct, exclude_area, tie_breaker, should_graph
+      group_missing, group_missing_pct, exclude_area, tie_breaker, should_graph,
+      rank_na_args
     )
 
     # Separate scores and plot
@@ -324,7 +342,7 @@ process_groups_sequential <- function(df, groups, group_var, numerator,
 process_groups_parallel <- function(df, groups, group_var, numerator,
                                     rank_var, denom, missing_values,
                                     exclude_area, tie_breaker, graph,
-                                    graph_subset, verbose) {
+                                    graph_subset, verbose, rank_na_args = list()) {
 
   if (!requireNamespace("furrr", quietly = TRUE)) {
     stop("Package 'furrr' required for parallel processing. Install with install.packages('furrr').")
@@ -354,7 +372,8 @@ process_groups_parallel <- function(df, groups, group_var, numerator,
     # Use the internal helper (returns list with scores + plot)
     process_single_group_internal(
       group_data, g, group_var, numerator, rank_var, denom,
-      group_missing, group_missing_pct, exclude_area, tie_breaker, should_graph
+      group_missing, group_missing_pct, exclude_area, tie_breaker, should_graph,
+      rank_na_args
     )
   }
 

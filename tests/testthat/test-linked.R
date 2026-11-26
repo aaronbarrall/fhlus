@@ -343,3 +343,22 @@ test_that("without numerator_layer, no sites are sent", {
   expect_null(w$x$sites)
   expect_false(any(grepl("on map", w$x$tips)))
 })
+
+test_that("neighborhoods dropped for a missing rank are drawn as not scored", {
+  geo <- make_linked_sf()
+  geo$area <- as.numeric(sf::st_area(geo))
+  geo$income[5] <- NA
+  geo$units[5] <- 0
+  result <- fhlus_score(sf::st_drop_geometry(geo), "units", "income", "area",
+                        graph = FALSE, verbose = FALSE)
+  w <- suppressMessages(fhlus_linked(result, geometry = geo, id = "GEOID"))
+  expect_equal(w$x$unscored$n, 1)
+  expect_match(w$x$unscored$tips[1], geo$GEOID[5])
+  expect_match(w$x$unscored$tips[1], "Not scored: income is missing")
+  gj <- jsonlite::fromJSON(as.character(w$x$unscored$geojson), simplifyVector = FALSE)
+  expect_equal(gj$features[[1]]$properties$u, 0)
+
+  # No geometry argument: nothing to draw
+  expect_null(fhlus_linked(fhlus_score(geo, "units", "income", "area",
+                                       graph = FALSE, verbose = FALSE))$x$unscored)
+})
