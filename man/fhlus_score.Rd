@@ -14,6 +14,9 @@ fhlus_score(
   graph = TRUE,
   exclude_area = NULL,
   tie_breaker = NULL,
+  rank_na = c("auto", "drop", "impute"),
+  impute_method = c("mean", "median", "idw"),
+  impute_k = 5,
   boundary_label = "Tract Boundary",
   plot_subtitle = NULL,
   show_ci_bands = FALSE,
@@ -39,9 +42,34 @@ fhlus_score(
 
 \item{graph}{Logical, whether to produce a visualization}
 
-\item{exclude_area}{Column name for areas to exclude (e.g., open space) or NULL}
+\item{exclude_area}{Column name for areas to exclude (e.g., open space) or
+NULL. The score then uses \code{denom - exclude_area} (floored at 0), stored
+in \code{result$data} as \code{<denom>_adjusted}; the \code{denom} column
+keeps its original values.}
 
 \item{tie_breaker}{Vector of column names to use as tie breakers in ranking}
+
+\item{rank_na}{How to handle rows where a rank variable is \code{NA}:
+\describe{
+\item{\code{"auto"}}{(default) rows with no numerator (0) are dropped
+with a message; rows with numerator values are imputed from their
+spatial neighbors (see \code{\link{spatial_impute}()}), since dropping
+them would remove units and bias the score. If they can't be imputed
+(no geometry, \pkg{spdep} not installed, or no neighbor with a value),
+\code{fhlus_score()} stops with an error naming them.}
+\item{\code{"impute"}}{impute every row with a missing rank value. Rows
+with numerator values that can't be imputed are an error; rows without
+are dropped.}
+\item{\code{"drop"}}{drop every such row. Dropping rows with numerator
+values gives a warning listing them and the numerator lost.}
+}
+Imputed rows are ranked with the rest and flagged in
+\code{result$data$.rank_imputed}; \code{result$meta$rank_na} records the
+dropped and imputed rows.}
+
+\item{impute_method, impute_k}{Imputation method (\code{"mean"},
+\code{"median"} or \code{"idw"}) and number of nearest neighbors, passed
+to \code{spatial_impute()}.}
 
 \item{boundary_label}{Label for boundary points on plot, or NULL to hide them}
 
@@ -75,8 +103,13 @@ A list of class "fhlus" with components:
 \item{data_lowest}{Data frame with CI lowest-bound cumulative distributions, or NULL}
 \item{data_highest}{Data frame with CI highest-bound cumulative distributions, or NULL}
 \item{meta}{List of the column names and settings used (numerator, denom,
-rank_var, tie_breaker, exclude_area, missing). Used by
-\code{fhlus_segments()} and \code{fhlus_interactive()}.}
+denom_used, rank_var, tie_breaker, exclude_area, missing, rank_na). Used
+by \code{fhlus_segments()} and \code{fhlus_interactive()}.
+\code{denom_used} is the column the score was computed from
+(\code{<denom>_adjusted} with \code{exclude_area}, otherwise
+\code{denom}). \code{rank_na} is a list of two data frames:
+\code{dropped} (id, rank_var, numerator_value, denom_value) and
+\code{imputed} (id, rank_var, imputed_value, method, k).}
 }
 \description{
 Functions for calculating the Fair Housing Land Use Score

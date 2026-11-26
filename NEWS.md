@@ -16,8 +16,17 @@
 * New `clip_to_boundary()` clips neighborhoods to a boundary and adds `original_area` and `share_in_boundary`. Slivers under `min_share` (default 1%) of a tract's area are dropped.
 * New `assign_to_neighborhoods()` sums point or polygon numerators into neighborhoods. Every neighborhood is kept, with 0 where nothing falls. Polygons are assigned by `"point_on_surface"` (default) or split by `"area_weighted"` overlap. It reports how much was assigned and handles features outside every neighborhood with `outside = "warn"` / `"error"` / `"ignore"`.
 
+### Missing Rank Values
+
+* New `rank_na` argument to `fhlus_score()` and `grouped_fhlus()` (with `impute_method` and `impute_k`). Previously every row with a missing rank value was dropped, which silently removed units when the row had any. Now, by default (`"auto"`), rows with no numerator are dropped with a message, and rows with numerator values are imputed from their spatial neighbors with `spatial_impute()` before ranking. If they can't be imputed (plain data frame, spdep not installed, or no neighbor with a value), `fhlus_score()` stops with an error naming them and the units at stake. `"impute"` imputes every missing row; `"drop"` drops them all, warning about any numerator lost. **This changes the default:** plain data frames with missing rank values in rows with units now error instead of dropping those rows.
+* `result$meta$rank_na` records the `dropped` and `imputed` rows, and `result$data$.rank_imputed` flags imputed rows. Popups in `fhlus_interactive()` and `fhlus_linked()` mark imputed values ("imputed from 5 nearest neighbors (mean)"). `grouped_fhlus()` adds `n_rank_imputed` and `n_rank_dropped` columns.
+* `fhlus_linked(geometry = )` draws neighborhoods dropped for a missing rank value in grey as "not scored", instead of leaving a gap.
+
 ## Bug Fixes
 
+* With `exclude_area`, `fhlus_score()` no longer overwrites the denominator column with the available area. `result$data` keeps the original `denom` values and adds `<denom>_adjusted`, which the score uses (`result$meta$denom_used`). Scores and curves are unchanged. Popups now show the total, the excluded area (with its share of the total) and the available area used in the score; before, the available area was labeled with the denominator's name next to an excluded area that could be larger than it.
+* `fhlus_to_list()` output is now `format_version` 2: `meta` gains `denom_used` and `rank_na`, and segments carry `<denom>_adjusted` and `.rank_imputed`.
+* Popup values of 1,000 or more are shown in full (140,954,937 rather than 141,000,000).
 * `fhlus_score()` no longer fails on sf input when `verbose = TRUE` (the default). The NA/Inf checks picked up the sticky geometry column.
 * `aggregate_to_neighborhoods()` now wraps `assign_to_neighborhoods()`. Previously a point on a shared tract edge was counted in both tracts, polygon features were counted in full in every tract they touched, and features outside every tract were dropped silently (they now trigger a warning).
 

@@ -107,6 +107,9 @@
     });
 
     var sites = x.sites || null;
+    var unscored = x.unscored || null;
+    var unscoredGj = unscored ? (typeof unscored.geojson === 'string' ? JSON.parse(unscored.geojson) : unscored.geojson) : null;
+    var UNSCORED_COLOR = '#b5b5b5';
     var siteGj = sites ? (typeof sites.geojson === 'string' ? JSON.parse(sites.geojson) : sites.geojson) : null;
     var siteLayers = !sites ? [] : sites.kind === 'point' ? ['fhl-site-pt'] : ['fhl-site-fill'];
     var siteAll = !sites ? [] : sites.kind === 'point' ? ['fhl-site-pt', 'fhl-site-hl'] :
@@ -296,12 +299,22 @@
 
     var HOV = ['boolean', ['feature-state', 'hover'], false];
     var PIN = ['boolean', ['feature-state', 'pin'], false];
+    var SHOV = ['boolean', ['feature-state', 'hover'], false];
 
     map.on('load', function () {
       map.addSource('fhl', {type: 'geojson', data: gj, promoteId: 'i'});
       map.addLayer({id: 'fhl-fill', type: 'fill', source: 'fhl',
                     paint: {'fill-color': fillColor(), 'fill-antialias': false}});
       map.addLayer({id: 'fhl-edge', type: 'line', source: 'fhl', paint: edgePaint()});
+      if (unscored) {
+        map.addSource('fhl-unscored', {type: 'geojson', data: unscoredGj, promoteId: 'u'});
+        map.addLayer({id: 'fhl-unscored-fill', type: 'fill', source: 'fhl-unscored',
+                      paint: {'fill-color': UNSCORED_COLOR,
+                              'fill-opacity': ['case', SHOV, 0.6, 0.4]}});
+        map.addLayer({id: 'fhl-unscored-line', type: 'line', source: 'fhl-unscored',
+                      paint: {'line-color': '#6f6f6f', 'line-width': 1,
+                              'line-dasharray': [2, 2]}});
+      }
       // Basemap labels sit above the fill so place names stay readable
       Object.keys(BASEMAPS).forEach(function (k) {
         var b = BASEMAPS[k];
@@ -347,10 +360,23 @@
         }
       }
       var fs = map.queryRenderedFeatures(pt, {layers: ['fhl-fill']});
-      return fs.length ? {site: null, i: fs[0].id} : null;
+      if (fs.length) return {site: null, i: fs[0].id};
+      if (unscored) {
+        var us = map.queryRenderedFeatures(pt, {layers: ['fhl-unscored-fill']});
+        if (us.length) return {site: null, i: null, unscored: us[0].id};
+      }
+      return null;
+    }
+    var unscoredHovered = null;
+    function setUnscoredHover(u) {
+      if (!unscored || u === unscoredHovered) return;
+      if (unscoredHovered !== null) map.setFeatureState({source: 'fhl-unscored', id: unscoredHovered}, {hover: false});
+      unscoredHovered = u;
+      if (u !== null) map.setFeatureState({source: 'fhl-unscored', id: u}, {hover: true});
     }
     function clearMapHover() {
       map.getCanvas().style.cursor = '';
+      setUnscoredHover(null);
       setSiteHover(null);
       setHover(null);
       tip.style.display = 'none';
@@ -358,6 +384,15 @@
     map.on('mousemove', function (e) {
       var hit = pick(e.point);
       if (!hit) { clearMapHover(); return; }
+      if (hit.unscored !== undefined) {
+        map.getCanvas().style.cursor = '';
+        setSiteHover(null);
+        setHover(null);
+        setUnscoredHover(hit.unscored);
+        showTip(unscored.tips[hit.unscored], e.point);
+        return;
+      }
+      setUnscoredHover(null);
       map.getCanvas().style.cursor = 'pointer';
       setSiteHover(hit.site);
       setHover(hit.i);
@@ -374,7 +409,6 @@
     });
 
     // ---- Numerator features ------------------------------------------
-    var SHOV = ['boolean', ['feature-state', 'hover'], false];
     function addSiteLayers() {
       map.addSource('fhl-sites', {type: 'geojson', data: siteGj, promoteId: 'j'});
       var fill = ['case', ['<', ['get', 'g'], 0], sites.outside_color, sites.color];
@@ -536,12 +570,23 @@
       return out;
     }
 
+    function unscoredLegend() {
+      return '<div class="fhl-legend-row"><span class="fhl-swatch" style="background:' + UNSCORED_COLOR +
+             ';outline:1px dashed #6f6f6f"></span>Not scored (missing rank)</div>';
+    }
+
     function renderLegend() {
       var L = layerByKey[state.fillBy];
       var withSites = sites && state.showSites;
-      if (!L && !withSites) { legend.style.display = 'none'; return; }
+      if (!L && !withSites && !unscored) { legend.style.display = 'none'; return; }
       legend.style.display = 'block';
-      if (!L) { legend.innerHTML = siteLegend(); return; }
+      if (!L) {
+        var parts = [];
+        if (withSites) parts.push(siteLegend());
+        if (unscored) parts.push(unscoredLegend());
+        legend.innerHTML = parts.join('<div class="fhl-legend-sep"></div>');
+        return;
+      }
       var g = L.legend, out = '<div class="fhl-legend-title">' + g.title + '</div>';
       if (g.type === 'gradient') {
         out += '<div class="fhl-legend-bar" style="background:linear-gradient(to right,' +
@@ -554,6 +599,7 @@
                  it.color + '"></span>' + it.label + '</div>';
         });
       }
+      if (unscored) out += unscoredLegend();
       if (withSites) out += '<div class="fhl-legend-sep"></div>' + siteLegend();
       legend.innerHTML = out;
     }

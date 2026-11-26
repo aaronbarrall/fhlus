@@ -107,8 +107,8 @@ fhlus_segments <- function(result, id = NULL, tooltip_vars = NULL,
 
   # Raw values: variables used in the calculation, then requested extras
   raw_cols <- unique(c(meta$rank_var, meta$numerator, meta$denom,
-                       meta$exclude_area, meta$tie_breaker,
-                       unname(tooltip_vars)))
+                       meta$denom_used, meta$exclude_area, meta$tie_breaker,
+                       ".rank_imputed", unname(tooltip_vars)))
   for (col in setdiff(raw_cols, names(seg))) {
     if (col %in% names(d)) seg[[col]] <- d[[col]]
   }
@@ -135,7 +135,9 @@ fhlus_segments <- function(result, id = NULL, tooltip_vars = NULL,
 #'   \code{fhlus_interactive()} shows).
 #'
 #' @return A list with elements:
-#'   \item{format_version}{Integer version of this structure (currently 1)}
+#'   \item{format_version}{Integer version of this structure (currently 2;
+#'     version 2 adds \code{meta$denom_used} and \code{meta$rank_na}, and keeps
+#'     the original denominator values alongside \code{<denom>_adjusted})}
 #'   \item{score}{The base FHLUS score}
 #'   \item{auc}{Area under the curve}
 #'   \item{scores}{Data frame with \code{type}, \code{score},
@@ -185,7 +187,7 @@ fhlus_to_list <- function(result, id = NULL, tooltip_vars = NULL,
   if (!is.null(meta$tie_breaker)) meta$tie_breaker <- I(meta$tie_breaker)
 
   list(
-    format_version = 1L,
+    format_version = 2L,
     score = base_score(result),
     auc = result$auc,
     scores = as.data.frame(result$scores),
@@ -687,7 +689,7 @@ resolve_tooltip_vars <- function(d, tooltip_vars) {
 #' @noRd
 fhlus_internal_cols <- function() {
   c("rank", "share_denominator", "share_variable",
-    "cumulativeVariable", "cumulativeDenom")
+    "cumulativeVariable", "cumulativeDenom", ".rank_imputed")
 }
 
 #' Base score of a result
@@ -712,18 +714,12 @@ build_tooltips <- function(seg) {
 
   values <- list()
   for (rv in intersect(meta$rank_var, names(seg))) {
-    values <- c(values, list(tt_row(rv, fmt_value(seg[[rv]]))))
+    values <- c(values, list(tt_row(rv, fmt_value(seg[[rv]]), imputed_notes(seg, rv))))
   }
   values <- c(values, list(
     tt_row(meta$numerator, fmt_value(seg[[meta$numerator]]),
-           paste(fmt_pct(seg$share_var), "of total")),
-    tt_row(meta$denom, fmt_value(seg[[meta$denom]]),
-           paste(fmt_pct(seg$share_denom), "of total"))
-  ))
-  if (!is.null(meta$exclude_area) && meta$exclude_area %in% names(seg)) {
-    values <- c(values, list(tt_row(paste(meta$exclude_area, "(excluded)"),
-                                    fmt_value(seg[[meta$exclude_area]]))))
-  }
+           paste(fmt_pct(seg$share_var), "of total"))
+  ), denom_rows(seg, meta))
   values <- c(values, list(
     tt_row("Concentration", fmt_conc(seg$concentration), "of proportional share")
   ))
@@ -738,6 +734,72 @@ build_tooltips <- function(seg) {
 
   tt_compose(list(header, values, cumulative,
                   tt_extra_rows(list(seg), attr(seg, "tooltip_vars"))))
+}
+
+#' Denominator rows for a single-result tooltip
+#'
+#' With an excluded area, shows the total, the excluded part (and its share of
+#' the total) and the available area the score uses. Results from earlier versions
+#' overwrote the denominator with the available area, so they
+#' only get the denominator and the excluded area.
+#' @noRd
+denom_rows <- function(seg, meta) {
+  used <- denom_value_col(meta, seg)
+  excl <- meta$exclude_area
+  has_excl <- !is.null(excl) && excl %in% names(seg)
+  if (has_excl && used != meta$denom && meta$denom %in% names(seg)) {
+    total <- seg[[meta$denom]]
+    ex <- seg[[excl]]
+    ex_share <- ifelse(total > 0, paste0("(", fmt_pct(ex / total), " of ", html_escape(meta$denom), ")"), "")
+    return(list(
+      tt_row(meta$denom, fmt_value(total)),
+      tt_row(paste0("Excluded (", excl, ")"), fmt_value(ex), ex_share),
+      tt_row(paste("Available", meta$denom), fmt_value(seg[[used]]),
+             paste(fmt_pct(seg$share_denom), "of total available, used in the score"))
+    ))
+  }
+  rows <- list(tt_row(meta$denom, fmt_value(seg[[meta$denom]]),
+                      paste(fmt_pct(seg$share_denom), "of total")))
+  if (has_excl) {
+    rows <- c(rows, list(tt_row(paste(excl, "(excluded)"), fmt_value(seg[[excl]]))))
+  }
+  rows
+}
+
+#' Column holding the denominator values the score used
+#' @noRd
+denom_value_col <- function(meta, seg) {
+  used <- meta$denom_used
+  if (!is.null(used) && used %in% names(seg)) used else meta$denom
+}
+
+#' Label for the denominator values the score used
+#' @noRd
+denom_value_label <- function(meta, seg) {
+  if (denom_value_col(meta, seg) != meta$denom) paste("Available", meta$denom) else meta$denom
+}
+
+#' "imputed from k nearest neighbors" notes for one rank variable ("" when
+#' the value was observed)
+#' @noRd
+imputed_notes <- function(seg, rv) {
+  out <- rep("", nrow(seg))
+  if (!".rank_imputed" %in% names(seg) || !any(seg$.rank_imputed)) return(out)
+  imp <- attr(seg, "fhlus_meta")$rank_na$imputed
+  flagged <- which(seg$.rank_imputed)
+  if (!is.null(imp) && nrow(imp) > 0) {
+    imp <- imp[imp$rank_var == rv, , drop = FALSE]
+    m <- match(seg$id[flagged], imp$id)
+    hit <- !is.na(m)
+    out[flagged[hit]] <- sprintf("imputed from %d nearest neighbors (%s)",
+                                 as.integer(imp$k[m[hit]]), imp$method[m[hit]])
+    # Rows flagged but not matched by ID (e.g. no ID column): generic note,
+    # unless this variable has records and the row isn't among them
+    if (any(!hit) && !any(imp$id %in% seg$id)) out[flagged[!hit]] <- "imputed"
+  } else {
+    out[flagged] <- "imputed"
+  }
+  out
 }
 
 #' Build one combined HTML tooltip per geography for a policy comparison
@@ -776,11 +838,14 @@ build_compare_tooltips <- function(seg_a, seg_b, label_a, label_b,
   for (rv in meta_a$rank_var) {
     shared <- c(shared, list(tt_row(rv, coalesce_fmt(a, b, rv))))
   }
-  same_denom <- identical(meta_a$denom, meta_b$denom) &&
-    isTRUE(all.equal(a[[meta_a$denom]][in_a & in_b], b[[meta_b$denom]][in_a & in_b]))
+  den_a <- denom_value_col(meta_a, seg_a)
+  den_b <- denom_value_col(meta_b, seg_b)
+  same_denom <- identical(den_a, den_b) &&
+    isTRUE(all.equal(a[[den_a]][in_a & in_b], b[[den_b]][in_a & in_b]))
   if (same_denom) {
     share_denom <- ifelse(in_a, a$share_denom, b$share_denom)
-    shared <- c(shared, list(tt_row(meta_a$denom, coalesce_fmt(a, b, meta_a$denom),
+    shared <- c(shared, list(tt_row(denom_value_label(meta_a, seg_a),
+                                    coalesce_fmt(a, b, den_a),
                                     paste(fmt_pct(share_denom), "of total"))))
   }
 
@@ -792,7 +857,8 @@ build_compare_tooltips <- function(seg_a, seg_b, label_a, label_b,
       tt_indent(tt_row("Concentration", fmt_conc(s$concentration)))
     )
     if (!same_denom) {
-      lines <- c(lines, list(tt_indent(tt_row(meta$denom, fmt_value(s[[meta$denom]]),
+      den <- denom_value_col(meta, s)
+      lines <- c(lines, list(tt_indent(tt_row(denom_value_label(meta, s), fmt_value(s[[den]]),
                                                paste(fmt_pct(s$share_denom), "of total")))))
     }
     lines <- c(lines, list(tt_indent(tt_row("Cumulative",
@@ -923,7 +989,9 @@ fmt_value <- function(x) {
     vapply(x, function(v) {
       if (is.na(v)) return("NA")
       if (!is.finite(v)) return(as.character(v))
-      if (abs(v - round(v)) < 1e-9) {
+      # Whole numbers, and anything 1,000 or larger, as integers with commas;
+      # smaller decimals with 4 significant digits
+      if (abs(v - round(v)) < 1e-9 || abs(v) >= 1000) {
         formatC(round(v), format = "f", digits = 0, big.mark = ",")
       } else {
         formatC(signif(v, 4), format = "fg", digits = 4, big.mark = ",")
